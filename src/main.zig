@@ -1,14 +1,46 @@
 const std = @import("std");
 const cli = @import("cli.zig");
 const regex = @import("regex.zig");
-const nfa_mod = @import("nfa.zig");
+const NFA = @import("NFA.zig");
 
 const Errors = @import("Errors.zig");
-const NFA = nfa_mod.NFA;
 
 const KiB = 1024;
 const MiB = 1024 * KiB;
 const GiB = 1024 * MiB;
+
+const SearchStrategy = union(enum) {
+    const Self = @This();
+
+    Substring: []const u8,
+    Regex: struct {
+        gpa: std.mem.Allocator,
+        nfa: NFA,
+    },
+
+    pub fn match(self: *const Self, line: []const u8) !bool {
+        switch (self.*) {
+            .Substring => |s| return std.mem.indexOf(u8, line, s) != null,
+            .Regex => |r| {
+                for (0..line.len) |i| {
+                    if (try walkNFA(r.gpa, r.nfa, line[i..])) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+        }
+    }
+
+    pub fn deinit(self: *Self) void {
+        switch (self.*) {
+            .Substring => {},
+            .Regex => |*r| {
+                r.nfa.deinit();
+            },
+        }
+    }
+};
 
 pub fn main() void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -52,11 +84,15 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator) !Errors {
     var bw_stdout = std.io.bufferedWriter(stdout_file);
     const stdout = bw_stdout.writer();
 
-    var args = try cli.Args.parse(gpa);
+    var args = try cli.Args.parse(gpa, &errors);
     defer args.deinit(gpa);
+    if (errors.errors.items.len != 0) {
+        try errors.addError("Errors occured, use `--help` to see the guide", .{});
+        return errors;
+    }
 
-    if (args.pattern == null) {
-        try printHelp(stdout);
+    if (args.print_help or args.pattern == null) {
+        try cli.printHelp(stdout);
         try bw_stdout.flush();
         return errors;
     }
@@ -85,7 +121,7 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator) !Errors {
         if (!std.posix.isatty(stdin_file.handle)) {
             try input_files.append(gpa, stdin_file);
         } else {
-            try printHelp(stdout);
+            try cli.printHelp(stdout);
             try bw_stdout.flush();
             return errors;
         }
@@ -93,26 +129,15 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator) !Errors {
 
     const pattern = args.pattern.?;
 
-    if (try regex.isStringLiteral(pattern)) {
-        const buffer = try gpa.alloc(u8, 1 * KiB);
-        defer gpa.free(buffer);
-
-        for (input_files.items) |file| {
-            var buffered_reader = std.io.bufferedReader(file.reader());
-            var reader = buffered_reader.reader();
-
-            while (try reader.readUntilDelimiterOrEof(buffer, '\n')) |line| {
-                if (std.mem.indexOf(u8, line, pattern) != null) {
-                    try stdout.print("{s}\n", .{line});
-                }
-            }
+    var strategy =
+        if (try regex.isStringLiteral(pattern))
+        SearchStrategy{
+            .Substring = pattern,
         }
-        try bw_stdout.flush();
-    } else {
+    else blk: {
         const initial_error_count = errors.errors.items.len;
 
         var nfa = try regex.buildNFA(gpa, pattern, &errors);
-        defer nfa.deinit();
 
         if (errors.errors.items.len > initial_error_count) {
             return errors;
@@ -120,46 +145,67 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator) !Errors {
 
         nfa.finalize();
 
-        const buffer = try gpa.alloc(u8, 1 * KiB);
-        defer gpa.free(buffer);
-        for (input_files.items) |file| {
-            var buffered_reader = std.io.bufferedReader(file.reader());
-            var reader = buffered_reader.reader();
+        break :blk SearchStrategy{ .Regex = .{
+            .gpa = gpa,
+            .nfa = nfa,
+        } };
+    };
+    defer strategy.deinit();
 
-            while (try reader.readUntilDelimiterOrEof(buffer, '\n')) |line| {
-                for (0..line.len) |i| {
-                    if (try walkNFA(gpa, nfa, line[i..])) {
-                        try stdout.print("{s}\n", .{line});
-                        break;
-                    }
+    const buffer = try gpa.alloc(u8, 1 * KiB);
+    defer gpa.free(buffer);
+
+    const multiple_files = input_files.items.len > 0;
+    for (0.., args.filenames, input_files.items) |i, filename, file| {
+        var buffered_reader = std.io.bufferedReader(file.reader());
+        var reader = buffered_reader.reader();
+
+        var line_number: u32 = 1;
+        var printed_filename = false;
+        while (try reader.readUntilDelimiterOrEof(buffer, '\n')) |line| : (line_number += 1) {
+            if (!try strategy.match(line)) {
+                continue;
+            }
+
+            if (!args.data_only) {
+                const should_print_filename = multiple_files and !printed_filename;
+                const should_print_line_number = multiple_files;
+                
+                if (should_print_filename) {
+                    try stdout.print("{s}{s}{s}\n", .{ cli.ANSI.Fg.Magenta, filename, cli.ANSI.Reset });
+                    printed_filename = true;
+                }
+
+                if (should_print_line_number) {
+                    try stdout.print("{s}{d}:{s} ", .{ cli.ANSI.Fg.Green, line_number, cli.ANSI.Reset });
                 }
             }
+
+            try stdout.print("{s}\n", .{line});
         }
-        try bw_stdout.flush();
+
+        const last_file = i == input_files.items.len - 1;
+        if (!args.data_only and !last_file) {
+            try stdout.writeByte('\n');
+        }
     }
+    try bw_stdout.flush();
 
     return errors;
 }
 
-fn printHelp(writer: anytype) !void {
-    try writer.writeAll(
-        \\Usage:
-        \\zgrep [OPTION]... <PATTERN> [FILE]... 
-    );
-}
-
-fn walkNFA(allocator: std.mem.Allocator, automata: NFA, input: []const u8) !bool {
+fn walkNFA(allocator: std.mem.Allocator, nfa: NFA, input: []const u8) !bool {
     var stack = std.ArrayListUnmanaged(struct {
         state_index: u32,
         input_start: u32,
-        iter: nfa_mod.TransitionIterator,
+        iter: NFA.TransitionIterator,
     }){};
     defer stack.deinit(allocator);
 
     try stack.append(allocator, .{
         .state_index = 0,
         .input_start = 0,
-        .iter = if (input.len > 0) automata.walk(0, input[0]) else .{},
+        .iter = if (input.len > 0) nfa.walk(0, input[0]) else .{},
     });
 
     while (stack.items.len > 0) {
@@ -167,7 +213,7 @@ fn walkNFA(allocator: std.mem.Allocator, automata: NFA, input: []const u8) !bool
         const char_index = stack.getLast().input_start;
         var iter = &stack.items[stack.items.len - 1].iter;
 
-        if (automata.isStateAccepting(state_index)) {
+        if (nfa.isStateAccepting(state_index)) {
             return true;
         }
 
@@ -180,7 +226,7 @@ fn walkNFA(allocator: std.mem.Allocator, automata: NFA, input: []const u8) !bool
         }
 
         if (iter.next()) |dest| {
-            const new_iter = if (char_index + 1 < input.len) automata.walk(dest, input[char_index + 1]) else nfa_mod.TransitionIterator{};
+            const new_iter = if (char_index + 1 < input.len) nfa.walk(dest, input[char_index + 1]) else NFA.TransitionIterator{};
 
             try stack.append(allocator, .{
                 .state_index = dest,

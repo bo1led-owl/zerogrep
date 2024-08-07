@@ -1,8 +1,7 @@
 const std = @import("std");
-const nfa = @import("nfa.zig");
+const NFA = @import("NFA.zig");
 
 const Errors = @import("Errors.zig");
-const NFA = nfa.NFA;
 
 pub const RegexError = error{
     TrailingBackslash,
@@ -49,7 +48,7 @@ pub fn buildNFA(allocator: std.mem.Allocator, pattern: []const u8, errors: *Erro
             .Literal => |l| {
                 const new_state = try automata.addState(.{});
 
-                try automata.addTransition(cur_state, nfa.Transition{
+                try automata.addTransition(cur_state, NFA.Transition{
                     .symbol = l,
                     .dest_index = new_state,
                 });
