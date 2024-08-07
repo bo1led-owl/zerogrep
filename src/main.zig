@@ -86,12 +86,13 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator) !Errors {
 
     var args = try cli.Args.parse(gpa, &errors);
     defer args.deinit(gpa);
+
     if (errors.errors.items.len != 0) {
         try errors.addError("Errors occured, use `--help` to see the guide", .{});
         return errors;
     }
 
-    if (args.print_help or args.pattern == null) {
+    if (args.print_help) {
         try cli.printHelp(stdout);
         try bw_stdout.flush();
         return errors;
@@ -115,29 +116,15 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator) !Errors {
         return errors;
     }
 
-    if (input_files.items.len == 0) {
-        const stdin_file = std.io.getStdIn();
-
-        if (!std.posix.isatty(stdin_file.handle)) {
-            try input_files.append(gpa, stdin_file);
-        } else {
-            try cli.printHelp(stdout);
-            try bw_stdout.flush();
-            return errors;
-        }
-    }
-
-    const pattern = args.pattern.?;
-
     var strategy =
-        if (try regex.isStringLiteral(pattern))
+        if (try regex.isStringLiteral(args.pattern))
         SearchStrategy{
-            .Substring = pattern,
+            .Substring = args.pattern,
         }
     else blk: {
         const initial_error_count = errors.errors.items.len;
 
-        var nfa = try regex.buildNFA(gpa, pattern, &errors);
+        var nfa = try regex.buildNFA(gpa, args.pattern, &errors);
 
         if (errors.errors.items.len > initial_error_count) {
             return errors;
@@ -155,43 +142,55 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator) !Errors {
     const buffer = try gpa.alloc(u8, 1 * KiB);
     defer gpa.free(buffer);
 
-    const multiple_files = input_files.items.len > 0;
-    for (0.., args.filenames, input_files.items) |i, filename, file| {
-        var buffered_reader = std.io.bufferedReader(file.reader());
+    if (!args.stdin) {
+        const multiple_files = input_files.items.len > 0;
+        for (0.., args.filenames, input_files.items) |i, filename, file| {
+            var buffered_reader = std.io.bufferedReader(file.reader());
+            var reader = buffered_reader.reader();
+
+            const last_file = i == input_files.items.len - 1;
+            try handleFile(filename, &reader, buffer, stdout, strategy, args.data_only, multiple_files, last_file);
+        }
+    } else {
+        const stdin_file = std.io.getStdIn();
+
+        var buffered_reader = std.io.bufferedReader(stdin_file.reader());
         var reader = buffered_reader.reader();
-
-        var line_number: u32 = 1;
-        var printed_filename = false;
-        while (try reader.readUntilDelimiterOrEof(buffer, '\n')) |line| : (line_number += 1) {
-            if (!try strategy.match(line)) {
-                continue;
-            }
-
-            if (!args.data_only) {
-                const should_print_filename = multiple_files and !printed_filename;
-                const should_print_line_number = multiple_files;
-                
-                if (should_print_filename) {
-                    try stdout.print("{s}{s}{s}\n", .{ cli.ANSI.Fg.Magenta, filename, cli.ANSI.Reset });
-                    printed_filename = true;
-                }
-
-                if (should_print_line_number) {
-                    try stdout.print("{s}{d}:{s} ", .{ cli.ANSI.Fg.Green, line_number, cli.ANSI.Reset });
-                }
-            }
-
-            try stdout.print("{s}\n", .{line});
-        }
-
-        const last_file = i == input_files.items.len - 1;
-        if (!args.data_only and !last_file) {
-            try stdout.writeByte('\n');
-        }
+        try handleFile("stdin", &reader, buffer, stdout, strategy, args.data_only, false, true);
     }
     try bw_stdout.flush();
 
     return errors;
+}
+
+fn handleFile(filename: []const u8, reader: anytype, buffer: []u8, stdout: anytype, strategy: SearchStrategy, data_only: bool, multiple_files: bool, last_file: bool) !void {
+    var line_number: u32 = 1;
+    var printed_filename = false;
+    while (try reader.readUntilDelimiterOrEof(buffer, '\n')) |line| : (line_number += 1) {
+        if (!try strategy.match(line)) {
+            continue;
+        }
+
+        if (!data_only) {
+            const should_print_filename = multiple_files and !printed_filename;
+            const should_print_line_number = multiple_files;
+
+            if (should_print_filename) {
+                try stdout.print("{s}{s}{s}\n", .{ cli.ANSI.Fg.Magenta, filename, cli.ANSI.Reset });
+                printed_filename = true;
+            }
+
+            if (should_print_line_number) {
+                try stdout.print("{s}{d}:{s} ", .{ cli.ANSI.Fg.Green, line_number, cli.ANSI.Reset });
+            }
+        }
+
+        try stdout.print("{s}\n", .{line});
+    }
+
+    if (!data_only and multiple_files and !last_file) {
+        try stdout.writeByte('\n');
+    }
 }
 
 fn walkNFA(allocator: std.mem.Allocator, nfa: NFA, input: []const u8) !bool {

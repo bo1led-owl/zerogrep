@@ -44,7 +44,8 @@ pub const Args = struct {
 
     data_only: bool = false,
     print_help: bool = false,
-    pattern: ?[]const u8 = null,
+    pattern: []const u8 = "",
+    stdin: bool = false,
     filenames: []const []const u8 = &[_][]u8{},
 
     pub fn parse(allocator: std.mem.Allocator, errors: *Errors) !Args {
@@ -54,7 +55,7 @@ pub const Args = struct {
         defer iter.deinit();
 
         _ = iter.skip(); // skip executable name
-        self.pattern = while (iter.next()) |arg| {
+        const pattern = while (iter.next()) |arg| {
             if (dashCount(arg) > 0) {
                 try self.parseOption(arg, errors);
             } else {
@@ -69,6 +70,21 @@ pub const Args = struct {
 
         filenames.shrinkAndFree(allocator, filenames.items.len);
         self.filenames = filenames.items;
+
+        if (pattern) |pat| {
+            self.pattern = pat;
+        } else {
+            try errors.addError("No search pattern provided", .{});
+        }
+
+        if (filenames.items.len == 0) {
+            if (std.posix.isatty(std.io.getStdOut().handle)) {
+                self.stdin = true;
+                self.data_only = true;
+            } else {
+                try errors.addError("No input provided", .{});
+            }
+        }
 
         return self;
     }
