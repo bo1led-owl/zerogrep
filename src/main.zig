@@ -149,21 +149,37 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator) !Errors {
             var reader = buffered_reader.reader();
 
             const last_file = i == input_files.items.len - 1;
-            try handleFile(filename, &reader, buffer, stdout, strategy, args.data_only, multiple_files, last_file);
+            const flags = HandleFileFlags{
+                .data_only = args.data_only,
+                .multiple_files = multiple_files,
+                .last_file = last_file,
+            };
+            try handleFile(filename, &reader, buffer, stdout, strategy, flags);
         }
     } else {
         const stdin_file = std.io.getStdIn();
 
         var buffered_reader = std.io.bufferedReader(stdin_file.reader());
         var reader = buffered_reader.reader();
-        try handleFile("stdin", &reader, buffer, stdout, strategy, args.data_only, false, true);
+        const flags = HandleFileFlags{
+            .data_only = args.data_only,
+            .multiple_files = false,
+            .last_file = true,
+        };
+        try handleFile("stdin", &reader, buffer, stdout, strategy, flags);
     }
     try bw_stdout.flush();
 
     return errors;
 }
 
-fn handleFile(filename: []const u8, reader: anytype, buffer: []u8, stdout: anytype, strategy: SearchStrategy, data_only: bool, multiple_files: bool, last_file: bool) !void {
+const HandleFileFlags = struct {
+    data_only: bool,
+    multiple_files: bool,
+    last_file: bool,
+};
+
+fn handleFile(filename: []const u8, reader: anytype, buffer: []u8, stdout: anytype, strategy: SearchStrategy, flags: HandleFileFlags) !void {
     var line_number: u32 = 1;
     var printed_filename = false;
     while (try reader.readUntilDelimiterOrEof(buffer, '\n')) |line| : (line_number += 1) {
@@ -171,9 +187,9 @@ fn handleFile(filename: []const u8, reader: anytype, buffer: []u8, stdout: anyty
             continue;
         }
 
-        if (!data_only) {
-            const should_print_filename = multiple_files and !printed_filename;
-            const should_print_line_number = multiple_files;
+        if (!flags.data_only) {
+            const should_print_filename = flags.multiple_files and !printed_filename;
+            const should_print_line_number = flags.multiple_files;
 
             if (should_print_filename) {
                 try stdout.print("{s}{s}{s}\n", .{ cli.ANSI.Fg.Magenta, filename, cli.ANSI.Reset });
@@ -188,7 +204,7 @@ fn handleFile(filename: []const u8, reader: anytype, buffer: []u8, stdout: anyty
         try stdout.print("{s}\n", .{line});
     }
 
-    if (!data_only and multiple_files and !last_file) {
+    if (!flags.data_only and flags.multiple_files and !flags.last_file) {
         try stdout.writeByte('\n');
     }
 }
