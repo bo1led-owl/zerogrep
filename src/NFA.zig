@@ -3,7 +3,7 @@ const Self = @This();
 
 allocator: std.mem.Allocator,
 states: std.ArrayListUnmanaged(State) = .{},
-accepting_states: std.ArrayListUnmanaged(u32) = .{},
+accepting_state: u32 = 0,
 
 pub fn init(allocator: std.mem.Allocator) Self {
     return .{
@@ -16,17 +16,12 @@ pub fn deinit(self: *Self) void {
         state.deinit(self.allocator);
     }
     self.states.deinit(self.allocator);
-    self.accepting_states.deinit(self.allocator);
 }
 
-pub fn finalize(self: *Self) void {
-    std.mem.sort(u32, self.accepting_states.items, {}, std.sort.asc(u32));
-}
-
-pub fn isStateAccepting(self: *const Self, state: u32) bool {
-    std.debug.assert(std.sort.isSorted(u32, self.accepting_states.items, {}, std.sort.asc(u32)));
-    return std.sort.binarySearch(u32, state, self.accepting_states.items, {}, order(u32)) != null;
-}
+// pub fn isStateAccepting(self: *const Self, state: u32) bool {
+//     std.debug.assert(std.sort.isSorted(u32, self.accepting_states.items, {}, std.sort.asc(u32)));
+//     return std.sort.binarySearch(u32, state, self.accepting_states.items, {}, order(u32)) != null;
+// }
 
 pub fn walk(self: *const Self, from: u32, key: u8) TransitionIterator {
     const state = self.states.items[from];
@@ -41,8 +36,9 @@ pub fn addState(self: *Self, state: State) !u32 {
     return @intCast(self.states.items.len - 1);
 }
 
-pub fn markStateAccepting(self: *Self, i: u32) !void {
-    try self.accepting_states.append(self.allocator, i);
+pub fn setAcceptingState(self: *Self, i: u32) void {
+    std.debug.assert(i < self.states.items.len);
+    self.accepting_state = i;
 }
 
 pub fn addTransition(self: *Self, state: u32, transition: Transition) !void {
@@ -96,11 +92,11 @@ pub const State = struct {
     }
 };
 
-fn order(comptime T: type) fn (void, T, T) std.math.Order {
-    return struct {
-        fn impl(context: void, lhs: T, rhs: T) std.math.Order {
-            _ = context;
-            return std.math.order(lhs, rhs);
-        }
-    }.impl;
-}
+// fn order(comptime T: type) fn (void, T, T) std.math.Order {
+//     return struct {
+//         fn impl(context: void, lhs: T, rhs: T) std.math.Order {
+//             _ = context;
+//             return std.math.order(lhs, rhs);
+//         }
+//     }.impl;
+// }

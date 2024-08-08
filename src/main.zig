@@ -1,6 +1,6 @@
 const std = @import("std");
 const cli = @import("cli.zig");
-const regex = @import("regex.zig");
+const Regex = @import("Regex.zig");
 const NFA = @import("NFA.zig");
 
 const Errors = @import("Errors.zig");
@@ -87,7 +87,7 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator) !Errors {
     var args = try cli.Args.parse(gpa, &errors);
     defer args.deinit(gpa);
 
-    if (errors.errors.items.len != 0) {
+    if (errors.count() != 0) {
         try errors.addError("Errors occured, use `--help` to see the guide", .{});
         return errors;
     }
@@ -117,22 +117,32 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator) !Errors {
     }
 
     var strategy =
-        if (try regex.isStringLiteral(args.pattern))
-        SearchStrategy{
+        if (try Regex.isStringLiteral(args.pattern))
+    literal_blk: {
+        break :literal_blk SearchStrategy{
             .Substring = args.pattern,
-        }
-    else blk: {
-        const initial_error_count = errors.errors.items.len;
+        };
+    } else regex_blk: {
+        const regex = Regex.init(gpa, &errors);
+        const nfa_build_result = try regex.buildNFA(args.pattern);
 
-        var nfa = try regex.buildNFA(gpa, args.pattern, &errors);
-
-        if (errors.errors.items.len > initial_error_count) {
+        if (nfa_build_result.errors_occured) {
             return errors;
         }
 
-        nfa.finalize();
+        const nfa = nfa_build_result.automata;
 
-        break :blk SearchStrategy{ .Regex = .{
+        // std.debug.print("{any}\n", .{nfa});
+        // for (0.., nfa.states.items) |i, state| {
+        //     std.debug.print("{d} {any}\n", .{ i, state });
+        //     for (0..state.transitions.len) |j| {
+        //         const transition = state.transitions.get(j);
+
+        //         std.debug.print("\t{c} -> {d}\n", .{ transition.symbol, transition.dest_index });
+        //     }
+        // }
+
+        break :regex_blk SearchStrategy{ .Regex = .{
             .gpa = gpa,
             .nfa = nfa,
         } };
@@ -182,6 +192,7 @@ const HandleFileFlags = struct {
 fn handleFile(filename: []const u8, reader: anytype, buffer: []u8, stdout: anytype, strategy: SearchStrategy, flags: HandleFileFlags) !void {
     var line_number: u32 = 1;
     var printed_filename = false;
+    var printed = false;
     while (try reader.readUntilDelimiterOrEof(buffer, '\n')) |line| : (line_number += 1) {
         if (!try strategy.match(line)) {
             continue;
@@ -202,9 +213,10 @@ fn handleFile(filename: []const u8, reader: anytype, buffer: []u8, stdout: anyty
         }
 
         try stdout.print("{s}\n", .{line});
+        printed = true;
     }
 
-    if (!flags.data_only and flags.multiple_files and !flags.last_file) {
+    if (printed and !flags.data_only and flags.multiple_files and !flags.last_file) {
         try stdout.writeByte('\n');
     }
 }
@@ -228,7 +240,7 @@ fn walkNFA(allocator: std.mem.Allocator, nfa: NFA, input: []const u8) !bool {
         const char_index = stack.getLast().input_start;
         var iter = &stack.items[stack.items.len - 1].iter;
 
-        if (nfa.isStateAccepting(state_index)) {
+        if (nfa.accepting_state == state_index) {
             return true;
         }
 

@@ -18,3 +18,7 @@ pub fn deinit(self: *Self) void {
 pub fn addError(self: *Self, comptime fmt: []const u8, args: anytype) !void {
     try self.errors.append(try std.fmt.allocPrint(self.arena, fmt, args));
 }
+
+pub fn count(self: *const Self) usize {
+    return self.errors.items.len;
+}
