@@ -22,10 +22,23 @@ const SearchStrategy = union(enum) {
         switch (self.*) {
             .Substring => |s| return std.mem.indexOf(u8, line, s) != null,
             .Regex => |r| {
+                // var timer = try std.time.Timer.start();
+
+                // defer {
+                //     const nfa_walk_time: f64 = @floatFromInt(timer.read());
+                //     std.debug.print("NFA is walked in {d:.3}us\n", .{
+                //         nfa_walk_time / std.time.ns_per_us,
+                //     });
+                // }
+
+                var stack = std.ArrayList(NFAStackFrame).init(r.gpa);
+                defer stack.deinit();
+
                 for (0..line.len) |i| {
-                    if (try walkNFA(r.gpa, r.nfa, line[i..])) {
+                    if (try walkNFA(&stack, r.nfa, line[i..])) {
                         return true;
                     }
+                    stack.clearRetainingCapacity();
                 }
                 return false;
             },
@@ -98,24 +111,6 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator) !Errors {
         return errors;
     }
 
-    var input_files = std.ArrayListUnmanaged(std.fs.File){};
-    defer input_files.deinit(gpa);
-    var got_error = false;
-    const cwd = std.fs.cwd();
-    for (args.filenames) |filename| {
-        const file = cwd.openFile(filename, .{}) catch |e| {
-            got_error = true;
-            try errors.addError("Error opening `{s}`: {any}\n", .{ filename, e });
-            continue;
-        };
-
-        try input_files.append(gpa, file);
-    }
-
-    if (got_error) {
-        return errors;
-    }
-
     var strategy =
         if (try Regex.isStringLiteral(args.pattern))
     literal_blk: {
@@ -123,24 +118,23 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator) !Errors {
             .Substring = args.pattern,
         };
     } else regex_blk: {
-        const regex = Regex.init(gpa, &errors);
-        const nfa_build_result = try regex.buildNFA(args.pattern);
+        // var timer = try std.time.Timer.start();
 
+        var regex = Regex.init(gpa, &errors, args.pattern);
+        const nfa_build_result = try regex.buildNFA();
+
+        // const nfa_build_time: f64 = @floatFromInt(timer.read());
+        // std.debug.print("NFA is built in {d:.3}us\n", .{
+        //     nfa_build_time / std.time.ns_per_us,
+        // });
+
+        var nfa = nfa_build_result.automata;
         if (nfa_build_result.errors_occured) {
+            nfa.deinit();
             return errors;
         }
 
-        const nfa = nfa_build_result.automata;
-
-        // std.debug.print("{any}\n", .{nfa});
-        // for (0.., nfa.states.items) |i, state| {
-        //     std.debug.print("{d} {any}\n", .{ i, state });
-        //     for (0..state.transitions.len) |j| {
-        //         const transition = state.transitions.get(j);
-
-        //         std.debug.print("\t{c} -> {d}\n", .{ transition.symbol, transition.dest_index });
-        //     }
-        // }
+        // nfa.debugPrint();
 
         break :regex_blk SearchStrategy{ .Regex = .{
             .gpa = gpa,
@@ -152,13 +146,21 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator) !Errors {
     const buffer = try gpa.alloc(u8, 1 * KiB);
     defer gpa.free(buffer);
 
-    if (!args.stdin) {
-        const multiple_files = input_files.items.len > 0;
-        for (0.., args.filenames, input_files.items) |i, filename, file| {
+    if (!args.from_stdin) {
+        const cwd = std.fs.cwd();
+
+        const multiple_files = args.filenames.len > 0;
+        for (0.., args.filenames) |i, filename| {
+            const file = cwd.openFile(filename, .{}) catch |e| {
+                try errors.addError("Error opening `{s}`: {s}\n", .{ filename, @errorName(e) });
+                continue;
+            };
+            defer file.close();
+
             var buffered_reader = std.io.bufferedReader(file.reader());
             var reader = buffered_reader.reader();
 
-            const last_file = i == input_files.items.len - 1;
+            const last_file = i == args.filenames.len - 1;
             const flags = HandleFileFlags{
                 .data_only = args.data_only,
                 .multiple_files = multiple_files,
@@ -221,15 +223,17 @@ fn handleFile(filename: []const u8, reader: anytype, buffer: []u8, stdout: anyty
     }
 }
 
-fn walkNFA(allocator: std.mem.Allocator, nfa: NFA, input: []const u8) !bool {
-    var stack = std.ArrayListUnmanaged(struct {
-        state_index: u32,
-        input_start: u32,
-        iter: NFA.TransitionIterator,
-    }){};
-    defer stack.deinit(allocator);
+const NFAStackFrame = struct {
+    state_index: u32,
+    input_start: u32,
+    iter: NFA.TransitionIterator,
+};
 
-    try stack.append(allocator, .{
+fn walkNFA(stack: *std.ArrayList(NFAStackFrame), nfa: NFA, input: []const u8) !bool {
+    // var stack = std.ArrayListUnmanaged(){};
+    // defer stack.deinit(allocator);
+
+    try stack.append(.{
         .state_index = 0,
         .input_start = 0,
         .iter = if (input.len > 0) nfa.walk(0, input[0]) else .{},
@@ -238,7 +242,7 @@ fn walkNFA(allocator: std.mem.Allocator, nfa: NFA, input: []const u8) !bool {
     while (stack.items.len > 0) {
         const state_index = stack.getLast().state_index;
         const char_index = stack.getLast().input_start;
-        var iter = &stack.items[stack.items.len - 1].iter;
+        var iter = &stack.*.items[stack.items.len - 1].iter;
 
         if (nfa.accepting_state == state_index) {
             return true;
@@ -255,7 +259,7 @@ fn walkNFA(allocator: std.mem.Allocator, nfa: NFA, input: []const u8) !bool {
         if (iter.next()) |dest| {
             const new_iter = if (char_index + 1 < input.len) nfa.walk(dest, input[char_index + 1]) else NFA.TransitionIterator{};
 
-            try stack.append(allocator, .{
+            try stack.append(.{
                 .state_index = dest,
                 .input_start = char_index + 1,
                 .iter = new_iter,

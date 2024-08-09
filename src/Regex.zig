@@ -6,27 +6,83 @@ const Errors = @import("Errors.zig");
 const Self = @This();
 
 gpa: std.mem.Allocator,
+lexer: Lexer,
 errors: *Errors,
 
-pub fn init(gpa: std.mem.Allocator, errors: *Errors) Self {
+pub fn init(gpa: std.mem.Allocator, errors: *Errors, pattern: []const u8) Self {
     return .{
         .gpa = gpa,
+        .lexer = .{
+            .input = pattern,
+        },
         .errors = errors,
     };
 }
 
-pub const Error = error{
+const CharError = error{
     TrailingBackslash,
     UnknownEscapeSequence,
 };
 
+const Lexer = struct {
+    input: []const u8,
+
+    fn advance(self: *Lexer) ?u8 {
+        if (self.input.len == 0) return null;
+
+        defer self.input = self.input[1..];
+        return self.input[0];
+    }
+
+    pub fn getChar(self: *Lexer) CharError!RegexCharacter {
+        var cur_char = self.advance();
+        if (cur_char == null) {
+            return RegexCharacter.EOF;
+        }
+
+        var escaped = false;
+        if (cur_char.? == '\\') {
+            escaped = true;
+            cur_char = self.advance();
+            if (cur_char == null) {
+                return CharError.TrailingBackslash;
+            }
+        }
+
+        return switch (cur_char.?) {
+            '(' => |c| if (escaped) RegexCharacter{ .Literal = c } else RegexCharacter.LParen,
+            ')' => |c| if (escaped) RegexCharacter{ .Literal = c } else RegexCharacter.RParen,
+            else => |c| RegexCharacter{ .Literal = c },
+        };
+    }
+};
+
+const RegexCharacter = union(enum) {
+    EOF,
+    LParen,
+    RParen,
+    Literal: u8,
+    Erroneous,
+
+    pub fn eq(lhs: RegexCharacter, rhs: RegexCharacter) bool {
+        if (@intFromEnum(lhs) != @intFromEnum(rhs)) {
+            return false;
+        }
+
+        return switch (lhs) {
+            .Literal => lhs.Literal == rhs.Literal,
+            else => true,
+        };
+    }
+};
+
 pub fn isStringLiteral(pattern: []const u8) !bool {
-    var i: usize = 0;
-    while (getChar(pattern[i..]) catch RegexCharacter{ .Erroneous = 0 }) |c| : (i += 1) {
+    var lexer = Lexer{ .input = pattern };
+    while (true) {
+        const c = lexer.getChar() catch RegexCharacter.Erroneous;
         switch (c) {
-            .Special => {
-                return false;
-            },
+            .EOF => break,
+            .LParen, .RParen => return false,
             .Literal => {},
             .Erroneous => {
                 return false;
@@ -36,15 +92,15 @@ pub fn isStringLiteral(pattern: []const u8) !bool {
     return true;
 }
 
-fn handleError(self: *const Self, pattern: []const u8, err: Error) !RegexCharacter {
+fn handleError(self: *const Self, err: CharError) !RegexCharacter {
     switch (err) {
-        Error.TrailingBackslash => {
+        CharError.TrailingBackslash => {
             try self.errors.addError("Pattern error: trailing backslash", .{});
-            return RegexCharacter{ .Erroneous = 1 };
+            return RegexCharacter.Erroneous;
         },
-        Error.UnknownEscapeSequence => {
-            try self.errors.addError("Pattern error: unknown escape sequence `{s}`", .{pattern[0..2]});
-            return RegexCharacter{ .Erroneous = 2 };
+        CharError.UnknownEscapeSequence => {
+            try self.errors.addError("Pattern error: unknown escape sequence", .{});
+            return RegexCharacter.Erroneous;
         },
     }
 }
@@ -54,42 +110,18 @@ pub const AutomataBuildResult = struct {
     errors_occured: bool,
 };
 
-pub fn buildNFA(self: *const Self, pattern: []const u8) !AutomataBuildResult {
+pub fn buildNFA(self: *Self) !AutomataBuildResult {
     const initial_error_count = self.errors.count();
 
     var nfa = NFA.init(self.gpa);
 
-    var i: u32 = 0;
-    var cur_state = try nfa.addState(.{});
-    while (getChar(pattern[i..]) catch |err|
-        try self.handleError(pattern[i..], err)) |regex_char| : (i += 1)
-    {
-        switch (regex_char) {
-            .Special => |special_char| {
-                switch (special_char) {
-                    .LParen => {
-                        const group_desc = try self.parseGroup(&nfa, cur_state, pattern[i + 1..]);
-                        cur_state = group_desc.accepting_state;
-                        i += group_desc.characters_parsed;
-                    },
-                    .RParen => {},
-                }
-            },
-            .Literal => |literal_char| {
-                const new_state = try nfa.addState(.{});
+    const cur_state = try nfa.addState(.{});
+    const res = try self.parse(&nfa, cur_state, RegexCharacter.EOF);
 
-                try nfa.addTransition(cur_state, NFA.Transition{
-                    .symbol = literal_char,
-                    .dest_index = new_state,
-                });
-                cur_state = new_state;
-            },
-            .Erroneous => |to_skip| {
-                i += to_skip - 1;
-            },
-        }
-    }
-    nfa.setAcceptingState(cur_state);
+    // std.debug.print("`{s}`\n", .{self.lexer.input});
+    // std.debug.assert(res.characters_parsed == pattern.len);
+
+    nfa.setAcceptingState(res.accepting_state);
 
     return .{
         .automata = nfa,
@@ -97,29 +129,34 @@ pub fn buildNFA(self: *const Self, pattern: []const u8) !AutomataBuildResult {
     };
 }
 
-const GroupDesc = struct {
+const ParseResult = struct {
     accepting_state: u32,
-    characters_parsed: u32,
 };
 
-fn parseGroup(self: *const Self, nfa: *NFA, initial_state: u32, pattern: []const u8) !GroupDesc {
-    var i: u32 = 0;
+fn parse(self: *Self, nfa: *NFA, initial_state: u32, parse_until: RegexCharacter) !ParseResult {
+    std.debug.assert(switch (parse_until) {
+        .EOF => true,
+        .RParen => true,
+        else => false,
+    });
+
     var cur_state = initial_state;
-    while (getChar(pattern[i..]) catch |err|
-        try self.handleError(pattern[i..], err)) |regex_char| : (i += 1)
-    {
+    var finished_correctly = false;
+    while (true) {
+        const regex_char = self.lexer.getChar() catch |err| try self.handleError(err);
+        if (regex_char.eq(parse_until)) {
+            finished_correctly = true;
+            break;
+        }
+
         switch (regex_char) {
-            .Special => |special_char| {
-                switch (special_char) {
-                    .LParen => {
-                        const group_desc = try self.parseGroup(nfa, cur_state, pattern[i + 1..]);
-                        cur_state = group_desc.accepting_state;
-                        i += group_desc.characters_parsed;
-                    },
-                    .RParen => {
-                        break;
-                    },
-                }
+            .EOF => break,
+            .LParen => {
+                const result = try self.parse(nfa, cur_state, RegexCharacter.RParen);
+                cur_state = result.accepting_state;
+            },
+            .RParen => {
+                try self.errors.addError("Regex error: unmatched `)`", .{});
             },
             .Literal => |literal_char| {
                 const new_state = try nfa.addState(.{});
@@ -130,46 +167,18 @@ fn parseGroup(self: *const Self, nfa: *NFA, initial_state: u32, pattern: []const
                 });
                 cur_state = new_state;
             },
-            .Erroneous => |to_skip| {
-                i += to_skip - 1;
-            },
+            .Erroneous => {},
+        }
+    }
+
+    if (!finished_correctly) {
+        switch (parse_until) {
+            .RParen => try self.errors.addError("Regex error: unmatched `(`", .{}),
+            else => unreachable,
         }
     }
 
     return .{
         .accepting_state = cur_state,
-        .characters_parsed = i,
-    };
-}
-
-const RegexCharacter = union(enum) {
-    Special: enum {
-        LParen,
-        RParen,
-    },
-    Literal: u8,
-    Erroneous: u32, // chars to skip
-};
-
-fn getChar(input: []const u8) Error!?RegexCharacter {
-    if (input.len == 0) {
-        return null;
-    }
-
-    var cur_char = input[0];
-
-    var escaped = false;
-    if (cur_char == '\\') {
-        escaped = true;
-        if (input.len < 2) {
-            return Error.TrailingBackslash;
-        }
-        cur_char = input[1];
-    }
-
-    return switch (cur_char) {
-        '(' => RegexCharacter{ .Special = .LParen },
-        ')' => RegexCharacter{ .Special = .RParen },
-        else => |c| RegexCharacter{ .Literal = c },
     };
 }

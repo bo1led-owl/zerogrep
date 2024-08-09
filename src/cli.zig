@@ -45,7 +45,7 @@ pub const Args = struct {
     data_only: bool = false,
     print_help: bool = false,
     pattern: []const u8 = "",
-    stdin: bool = false,
+    from_stdin: bool = false,
     filenames: []const []const u8 = &[_][]u8{},
 
     pub fn parse(allocator: std.mem.Allocator, errors: *Errors) !Args {
@@ -79,7 +79,7 @@ pub const Args = struct {
 
         if (filenames.items.len == 0) {
             if (std.posix.isatty(std.io.getStdOut().handle)) {
-                self.stdin = true;
+                self.from_stdin = true;
                 self.data_only = true;
             } else {
                 try errors.addError("No input provided", .{});

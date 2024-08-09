@@ -18,10 +18,17 @@ pub fn deinit(self: *Self) void {
     self.states.deinit(self.allocator);
 }
 
-// pub fn isStateAccepting(self: *const Self, state: u32) bool {
-//     std.debug.assert(std.sort.isSorted(u32, self.accepting_states.items, {}, std.sort.asc(u32)));
-//     return std.sort.binarySearch(u32, state, self.accepting_states.items, {}, order(u32)) != null;
-// }
+pub fn debugPrint(nfa: Self) void {
+    std.debug.print("{any}\n", .{nfa});
+    for (0.., nfa.states.items) |i, state| {
+        std.debug.print("{d} {any}\n", .{ i, state });
+        for (0..state.transitions.len) |j| {
+            const transition = state.transitions.get(j);
+
+            std.debug.print("\t{c} -> {d}\n", .{ transition.symbol, transition.dest_index });
+        }
+    }
+}
 
 pub fn walk(self: *const Self, from: u32, key: u8) TransitionIterator {
     const state = self.states.items[from];
