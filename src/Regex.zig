@@ -31,6 +31,7 @@ const Lexer = struct {
         if (self.input.len == 0) return null;
 
         defer self.input = self.input[1..];
+        std.debug.print("{c}", .{self.input[0]});
         return self.input[0];
     }
 
@@ -65,7 +66,8 @@ const RegexCharacter = union(enum) {
     Erroneous,
 
     pub fn eq(lhs: RegexCharacter, rhs: RegexCharacter) bool {
-        if (@intFromEnum(lhs) != @intFromEnum(rhs)) {
+        const tag = std.meta.Tag(RegexCharacter);
+        if (@as(tag, lhs) != @as(tag, rhs)) {
             return false;
         }
 
