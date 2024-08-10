@@ -52,6 +52,9 @@ const Lexer = struct {
 
         if (!escaped) {
             return switch (cur_char.?) {
+                '*' => RegexCharacter.Asterisk,
+                '+' => RegexCharacter.Plus,
+                '?' => RegexCharacter.QuestionMark,
                 '(' => RegexCharacter.LParen,
                 ')' => RegexCharacter.RParen,
                 '|' => RegexCharacter.Pipe,
@@ -59,7 +62,7 @@ const Lexer = struct {
             };
         } else {
             return switch (cur_char.?) {
-                '(', ')', '|' => |c| RegexCharacter{ .Literal = c },
+                '(', ')', '|', '*', '+', '?' => |c| RegexCharacter{ .Literal = c },
                 else => CharError.UnknownEscapeSequence,
             };
         }
@@ -71,6 +74,9 @@ const RegexCharacter = union(enum) {
     LParen,
     RParen,
     Pipe,
+    QuestionMark,
+    Asterisk,
+    Plus,
     Literal: u8,
     Erroneous,
 
@@ -93,9 +99,8 @@ pub fn isStringLiteral(pattern: []const u8) !bool {
         const c = lexer.getChar() catch RegexCharacter.Erroneous;
         switch (c) {
             .EOF => break,
-            .LParen, .RParen, .Pipe => return false,
             .Literal => {},
-            .Erroneous => {
+            else => {
                 return false;
             },
         }
@@ -154,6 +159,7 @@ fn parse(self: *Self, nfa: *NFA, initial_state: u32, parse_until: RegexCharacter
     var branches = std.ArrayListUnmanaged(u32){}; // indices of branches ends
 
     var cur_state = initial_state;
+    var prev_state: u32 = undefined;
     var finished_correctly = false;
     while (true) {
         const regex_char = self.lexer.getChar() catch |err| try self.handleError(err);
@@ -169,6 +175,7 @@ fn parse(self: *Self, nfa: *NFA, initial_state: u32, parse_until: RegexCharacter
             .EOF => break,
             .LParen => {
                 const result = try self.parse(nfa, cur_state, RegexCharacter.RParen);
+                prev_state = cur_state;
                 cur_state = result.accepting_state;
             },
             .RParen => {
@@ -176,7 +183,29 @@ fn parse(self: *Self, nfa: *NFA, initial_state: u32, parse_until: RegexCharacter
             },
             .Pipe => {
                 try branches.append(self.gpa, cur_state);
+                prev_state = cur_state;
                 cur_state = initial_state;
+            },
+            .Asterisk => {
+                const new_state = try nfa.addState(.{});
+
+                try nfa.addEpsTransition(cur_state, prev_state);
+                try nfa.addEpsTransition(prev_state, new_state);
+                prev_state = cur_state;
+                cur_state = new_state;
+            },
+            .QuestionMark => {
+                try nfa.addEpsTransition(prev_state, cur_state);
+                prev_state = cur_state;
+            },
+            .Plus => {
+                var last_state: u32 = undefined;
+                for (prev_state..cur_state + 1) |state| {
+                    last_state = try nfa.addState(try nfa.states.items[state].clone(self.gpa));
+                }
+                try nfa.addEpsTransition(cur_state, last_state);
+                prev_state = cur_state;
+                cur_state = last_state;
             },
             .Literal => |literal_char| {
                 const new_state = try nfa.addState(.{});
@@ -185,6 +214,7 @@ fn parse(self: *Self, nfa: *NFA, initial_state: u32, parse_until: RegexCharacter
                     .symbol = literal_char,
                     .dest_index = new_state,
                 });
+                prev_state = cur_state;
                 cur_state = new_state;
             },
             .Erroneous => {},

@@ -131,6 +131,10 @@ pub fn match(self: *const Self, stack: *Stack, line: []const u8) !bool {
     //     });
     // }
 
+    if (try self.walk(stack, "")) {
+        return true;
+    }
+
     for (0..line.len) |i| {
         if (try self.walk(stack, line[i..])) {
             return true;
@@ -180,6 +184,13 @@ pub const TransitionIterator = struct {
 pub const State = struct {
     transitions: std.MultiArrayList(Transition) = .{},
     epsilon_transitions: std.ArrayListUnmanaged(u32) = .{},
+
+    pub fn clone(self: State, allocator: std.mem.Allocator) !State {
+        return State{
+            .transitions = try self.transitions.clone(allocator),
+            .epsilon_transitions = try self.epsilon_transitions.clone(allocator),
+        };
+    }
 
     pub fn deinit(self: *State, allocator: std.mem.Allocator) void {
         self.transitions.deinit(allocator);

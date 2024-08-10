@@ -9,7 +9,7 @@ const KiB = 1024;
 const MiB = 1024 * KiB;
 const GiB = 1024 * MiB;
 
-pub fn main() void {
+pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
     defer {
@@ -24,24 +24,16 @@ pub fn main() void {
     const stderr = bw_stderr.writer();
 
     var errors = run(allocator, arena.allocator()) catch |e| {
-        stderr.print("Error: {s}\n", .{@errorName(e)}) catch {
-            @panic("Couldn't write to stderr");
-        };
-        bw_stderr.flush() catch {
-            @panic("Couldn't write to stderr");
-        };
+        try stderr.print("Error: {s}\n", .{@errorName(e)});
+        try bw_stderr.flush();
         return;
     };
     defer errors.deinit();
 
     for (errors.errors.items) |err| {
-        stderr.print("{s}\n", .{err}) catch {
-            @panic("Couldn't write to stderr");
-        };
+        try stderr.print("{s}\n", .{err});
     }
-    bw_stderr.flush() catch {
-        @panic("Couldn't write to stderr");
-    };
+    try bw_stderr.flush();
 }
 
 fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator) !Errors {
