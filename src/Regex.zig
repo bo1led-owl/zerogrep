@@ -31,7 +31,7 @@ const Lexer = struct {
         if (self.input.len == 0) return null;
 
         defer self.input = self.input[1..];
-        std.debug.print("{c}", .{self.input[0]});
+        // std.debug.print("{c}", .{self.input[0]});
         return self.input[0];
     }
 
@@ -50,11 +50,19 @@ const Lexer = struct {
             }
         }
 
-        return switch (cur_char.?) {
-            '(' => |c| if (escaped) RegexCharacter{ .Literal = c } else RegexCharacter.LParen,
-            ')' => |c| if (escaped) RegexCharacter{ .Literal = c } else RegexCharacter.RParen,
-            else => |c| RegexCharacter{ .Literal = c },
-        };
+        if (!escaped) {
+            return switch (cur_char.?) {
+                '(' => RegexCharacter.LParen,
+                ')' => RegexCharacter.RParen,
+                '|' => RegexCharacter.Pipe,
+                else => |c| RegexCharacter{ .Literal = c },
+            };
+        } else {
+            return switch (cur_char.?) {
+                '(', ')', '|' => |c| RegexCharacter{ .Literal = c },
+                else => CharError.UnknownEscapeSequence,
+            };
+        }
     }
 };
 
@@ -62,6 +70,7 @@ const RegexCharacter = union(enum) {
     EOF,
     LParen,
     RParen,
+    Pipe,
     Literal: u8,
     Erroneous,
 
@@ -84,7 +93,7 @@ pub fn isStringLiteral(pattern: []const u8) !bool {
         const c = lexer.getChar() catch RegexCharacter.Erroneous;
         switch (c) {
             .EOF => break,
-            .LParen, .RParen => return false,
+            .LParen, .RParen, .Pipe => return false,
             .Literal => {},
             .Erroneous => {
                 return false;
@@ -142,12 +151,17 @@ fn parse(self: *Self, nfa: *NFA, initial_state: u32, parse_until: RegexCharacter
         else => false,
     });
 
+    var branches = std.ArrayListUnmanaged(u32){}; // indices of branches ends
+
     var cur_state = initial_state;
     var finished_correctly = false;
     while (true) {
         const regex_char = self.lexer.getChar() catch |err| try self.handleError(err);
         if (regex_char.eq(parse_until)) {
             finished_correctly = true;
+            if (branches.items.len > 0) {
+                try branches.append(self.gpa, cur_state);
+            }
             break;
         }
 
@@ -159,6 +173,10 @@ fn parse(self: *Self, nfa: *NFA, initial_state: u32, parse_until: RegexCharacter
             },
             .RParen => {
                 try self.errors.addError("Regex error: unmatched `)`", .{});
+            },
+            .Pipe => {
+                try branches.append(self.gpa, cur_state);
+                cur_state = initial_state;
             },
             .Literal => |literal_char| {
                 const new_state = try nfa.addState(.{});
@@ -178,6 +196,15 @@ fn parse(self: *Self, nfa: *NFA, initial_state: u32, parse_until: RegexCharacter
             .RParen => try self.errors.addError("Regex error: unmatched `(`", .{}),
             else => unreachable,
         }
+    }
+
+    if (branches.items.len > 0) {
+        cur_state = try nfa.addState(.{});
+
+        for (branches.items) |state| {
+            try nfa.addEpsTransition(state, cur_state);
+        }
+        branches.deinit(self.gpa);
     }
 
     return .{

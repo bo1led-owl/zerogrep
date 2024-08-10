@@ -116,6 +116,7 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator) !Errors {
 
         var buffered_reader = std.io.bufferedReader(stdin_file.reader());
         var reader = buffered_reader.reader();
+
         const flags = HandleFileFlags{
             .data_only = args.data_only,
             .multiple_files = false,

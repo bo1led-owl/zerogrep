@@ -27,6 +27,10 @@ pub fn debugPrint(nfa: Self) void {
 
             std.debug.print("\t{c} -> {d}\n", .{ transition.symbol, transition.dest_index });
         }
+
+        for (state.epsilon_transitions.items) |eps_transition| {
+            std.debug.print("\teps -> {d}\n", .{eps_transition});
+        }
     }
 }
 
@@ -34,7 +38,14 @@ fn getTransitions(self: *const Self, from: u32, key: u8) TransitionIterator {
     const state = self.states.items[from];
     const range = std.sort.equalRange(u8, key, state.transitions.items(.symbol), {}, std.sort.asc(u8));
 
-    return TransitionIterator{ .transitions = state.transitions.items(.dest_index)[range[0]..range[1]] };
+    return TransitionIterator{
+        .transitions = state.transitions.items(.dest_index)[range[0]..range[1]],
+    };
+}
+
+fn getEpsTransitions(self: *const Self, from: u32) TransitionIterator {
+    const state = self.states.items[from];
+    return TransitionIterator{ .transitions = state.epsilon_transitions.items };
 }
 
 pub const Stack = std.ArrayList(StackFrame);
@@ -43,6 +54,7 @@ const StackFrame = struct {
     state_index: u32,
     input_start: u32,
     iter: TransitionIterator,
+    epsilon_iter: TransitionIterator,
 };
 
 fn walk(self: *const Self, stack: *Stack, input: []const u8) !bool {
@@ -53,19 +65,33 @@ fn walk(self: *const Self, stack: *Stack, input: []const u8) !bool {
         .state_index = 0,
         .input_start = 0,
         .iter = if (input.len > 0) self.getTransitions(0, input[0]) else .{},
+        .epsilon_iter = self.getEpsTransitions(0),
     });
 
     while (stack.items.len > 0) {
         const state_index = stack.getLast().state_index;
         const char_index = stack.getLast().input_start;
         var iter = &stack.*.items[stack.items.len - 1].iter;
+        var epsilon_iter = &stack.*.items[stack.items.len - 1].epsilon_iter;
 
         if (self.accepting_state == state_index) {
             return true;
         }
 
-        // TODO: epsilon transitions
-        // const state = automata.states.items[state_index];
+        if (epsilon_iter.next()) |dest| {
+            // std.debug.print("eps {d}: {d}\n", .{ state_index, dest });
+
+            const new_iter = if (char_index + 1 < input.len) self.getTransitions(dest, input[char_index + 1]) else TransitionIterator{};
+            const new_eps_iter = self.getEpsTransitions(dest);
+
+            try stack.append(.{
+                .state_index = dest,
+                .input_start = char_index + 1,
+                .iter = new_iter,
+                .epsilon_iter = new_eps_iter,
+            });
+            continue;
+        }
 
         if (char_index >= input.len) {
             _ = stack.popOrNull();
@@ -73,12 +99,16 @@ fn walk(self: *const Self, stack: *Stack, input: []const u8) !bool {
         }
 
         if (iter.next()) |dest| {
+            // std.debug.print("{d}: {d}\n", .{ state_index, dest });
+
             const new_iter = if (char_index + 1 < input.len) self.getTransitions(dest, input[char_index + 1]) else TransitionIterator{};
+            const new_eps_iter = self.getEpsTransitions(dest);
 
             try stack.append(.{
                 .state_index = dest,
                 .input_start = char_index + 1,
                 .iter = new_iter,
+                .epsilon_iter = new_eps_iter,
             });
         } else {
             _ = stack.popOrNull();
@@ -89,6 +119,7 @@ fn walk(self: *const Self, stack: *Stack, input: []const u8) !bool {
 }
 
 pub fn match(self: *const Self, stack: *Stack, line: []const u8) !bool {
+    // std.debug.print("accepting: {d}\n", .{self.accepting_state});
     defer stack.clearRetainingCapacity();
 
     // var timer = try std.time.Timer.start();
@@ -170,12 +201,3 @@ pub const State = struct {
         try self.epsilon_transitions.append(allocator, dest_index);
     }
 };
-
-// fn order(comptime T: type) fn (void, T, T) std.math.Order {
-//     return struct {
-//         fn impl(context: void, lhs: T, rhs: T) std.math.Order {
-//             _ = context;
-//             return std.math.order(lhs, rhs);
-//         }
-//     }.impl;
-// }
