@@ -212,3 +212,130 @@ pub const State = struct {
         try self.epsilon_transitions.append(allocator, dest_index);
     }
 };
+
+test "basic" {
+    //      a        b
+    // (0) ---> (1) ---> ((2))
+    //
+
+    const allocator = std.testing.allocator;
+    var nfa = Self.init(allocator);
+    defer nfa.deinit();
+
+    for (0..3) |_| {
+        _ = try nfa.addState(.{});
+    }
+
+    nfa.setAcceptingState(2);
+
+    try nfa.addTransition(0, Transition{ .symbol = 'a', .dest_index = 1 });
+    try nfa.addTransition(1, Transition{ .symbol = 'b', .dest_index = 2 });
+
+    var stack = Stack.init(allocator);
+    defer stack.deinit();
+    try std.testing.expect(try nfa.match(&stack, "ab"));
+    try std.testing.expect(try nfa.match(&stack, "cab"));
+    try std.testing.expect(try nfa.match(&stack, "abc"));
+    try std.testing.expect(!try nfa.match(&stack, "a"));
+    try std.testing.expect(!try nfa.match(&stack, "b"));
+    try std.testing.expect(!try nfa.match(&stack, ""));
+    try std.testing.expect(!try nfa.match(&stack, "ac"));
+}
+
+test "epsilon transition" {
+    //      a        e
+    // (0) ---> (1) ---> ((2))
+    //
+    const allocator = std.testing.allocator;
+    var nfa = Self.init(allocator);
+    defer nfa.deinit();
+
+    for (0..3) |_| {
+        _ = try nfa.addState(.{});
+    }
+
+    nfa.setAcceptingState(2);
+
+    try nfa.addTransition(0, Transition{ .symbol = 'a', .dest_index = 1 });
+    try nfa.addEpsTransition(1, 2);
+
+    var stack = Stack.init(allocator);
+    defer stack.deinit();
+    try std.testing.expect(try nfa.match(&stack, "ab"));
+    try std.testing.expect(try nfa.match(&stack, "cab"));
+    try std.testing.expect(try nfa.match(&stack, "abc"));
+    try std.testing.expect(try nfa.match(&stack, "a"));
+    try std.testing.expect(!try nfa.match(&stack, "b"));
+    try std.testing.expect(!try nfa.match(&stack, ""));
+}
+
+test "branching" {
+    //      a
+    //    ----> (1) --\
+    //  /              \ e
+    //  |   b        e  \
+    // (0) ---> (2) -----> ((4))
+    //  |               /
+    //  \   c          / e
+    //   -----> (3) --/
+
+    const allocator = std.testing.allocator;
+    var nfa = Self.init(allocator);
+    defer nfa.deinit();
+
+    for (0..5) |_| {
+        _ = try nfa.addState(.{});
+    }
+    nfa.setAcceptingState(4);
+
+    try nfa.addTransition(0, Transition{ .symbol = 'a', .dest_index = 1 });
+    try nfa.addTransition(0, Transition{ .symbol = 'b', .dest_index = 2 });
+    try nfa.addTransition(0, Transition{ .symbol = 'c', .dest_index = 3 });
+
+    try nfa.addEpsTransition(1, 4);
+    try nfa.addEpsTransition(2, 4);
+    try nfa.addEpsTransition(3, 4);
+
+    var stack = Stack.init(allocator);
+    defer stack.deinit();
+
+    try std.testing.expect(try nfa.match(&stack, "ab"));
+    try std.testing.expect(try nfa.match(&stack, "cab"));
+    try std.testing.expect(try nfa.match(&stack, "abc"));
+    try std.testing.expect(try nfa.match(&stack, "a"));
+    try std.testing.expect(try nfa.match(&stack, "b"));
+    try std.testing.expect(try nfa.match(&stack, "c"));
+    try std.testing.expect(!try nfa.match(&stack, ""));
+    try std.testing.expect(!try nfa.match(&stack, "d"));
+    try std.testing.expect(!try nfa.match(&stack, "foo"));
+}
+
+test "loop" {
+    //      a        e
+    // (0) ---> (1) ---> ((2))
+    //  ^ -------
+    //       e
+
+    const allocator = std.testing.allocator;
+    var nfa = Self.init(allocator);
+    defer nfa.deinit();
+
+    for (0..3) |_| {
+        _ = try nfa.addState(.{});
+    }
+    nfa.setAcceptingState(2);
+
+    try nfa.addTransition(0, Transition{ .symbol = 'a', .dest_index = 1 });
+    try nfa.addEpsTransition(1, 0);
+    try nfa.addEpsTransition(1, 2);
+
+    var stack = Stack.init(allocator);
+    defer stack.deinit();
+
+    try std.testing.expect(!try nfa.match(&stack, ""));
+    try std.testing.expect(try nfa.match(&stack, "a"));
+    try std.testing.expect(try nfa.match(&stack, "aa"));
+    try std.testing.expect(try nfa.match(&stack, "baab"));
+    try std.testing.expect(!try nfa.match(&stack, "b"));
+    try std.testing.expect(!try nfa.match(&stack, "c"));
+}

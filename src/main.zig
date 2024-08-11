@@ -159,3 +159,7 @@ fn handleFile(filename: []const u8, reader: anytype, buffer: []u8, stdout: anyty
         try stdout.writeByte('\n');
     }
 }
+
+test {
+    std.testing.refAllDeclsRecursive(@This());
+}
