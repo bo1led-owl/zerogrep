@@ -36,7 +36,13 @@ pub fn debugPrint(nfa: Self) void {
 
 fn getTransitions(self: *const Self, from: u32, key: u8) TransitionIterator {
     const state = self.states.items[from];
-    const range = std.sort.equalRange(u8, key, state.transitions.items(.symbol), {}, std.sort.asc(u8));
+    const range = std.sort.equalRange(
+        Transition.Range,
+        Transition.Range{ .bot = key, .top = key },
+        state.transitions.items(.range),
+        {},
+        Transition.Range.lessThan,
+    );
 
     return TransitionIterator{
         .transitions = state.transitions.items(.dest_index)[range[0]..range[1]],
@@ -163,8 +169,41 @@ pub fn addEpsTransition(self: *Self, state: u32, dest_index: u32) !void {
 }
 
 pub const Transition = struct {
-    symbol: u8,
-    dest_index: u32,
+    pub const Range = struct {
+        bot: u8 = 0,
+        top: u8 = 0,
+
+        pub fn lessThan(ctx: void, lhs: Range, rhs: Range) bool {
+            _ = ctx;
+            if (lhs.bot != rhs.bot) {
+                return lhs.bot < rhs.bot;
+            }
+            return lhs.top < rhs.top;
+        }
+    };
+
+    range: Range = .{},
+    dest_index: u32 = 0,
+
+    pub fn fromChar(c: u8, dest_index: u32) Transition {
+        return .{
+            .range = .{
+                .bot = c,
+                .top = c,
+            },
+            .dest_index = dest_index,
+        };
+    }
+
+    pub fn fromRange(bot: u8, top: u8, dest_index: u32) Transition {
+        return .{
+            .range = .{
+                .bot = bot,
+                .top = top,
+            },
+            .dest_index = dest_index,
+        };
+    }
 };
 
 pub const TransitionIterator = struct {
@@ -198,11 +237,12 @@ pub const State = struct {
 
     pub fn addTransition(self: *State, allocator: std.mem.Allocator, transition: Transition) !void {
         const i = std.sort.lowerBound(
-            u8,
-            transition.symbol,
-            self.transitions.items(.symbol),
+            // Transition,
+            Transition.Range,
+            transition.range,
+            self.transitions.items(.range),
             {},
-            std.sort.asc(u8),
+            Transition.Range.lessThan,
         );
         try self.transitions.insert(allocator, i, transition);
     }
@@ -227,8 +267,8 @@ test "basic" {
 
     nfa.setAcceptingState(2);
 
-    try nfa.addTransition(0, Transition{ .symbol = 'a', .dest_index = 1 });
-    try nfa.addTransition(1, Transition{ .symbol = 'b', .dest_index = 2 });
+    try nfa.addTransition(0, Transition.fromChar('a', 1));
+    try nfa.addTransition(1, Transition.fromChar('b', 2));
 
     var stack = Stack.init(allocator);
     defer stack.deinit();
@@ -255,7 +295,7 @@ test "epsilon transition" {
 
     nfa.setAcceptingState(2);
 
-    try nfa.addTransition(0, Transition{ .symbol = 'a', .dest_index = 1 });
+    try nfa.addTransition(0, Transition.fromChar('a', 1));
     try nfa.addEpsTransition(1, 2);
 
     var stack = Stack.init(allocator);
@@ -287,9 +327,9 @@ test "branching" {
     }
     nfa.setAcceptingState(4);
 
-    try nfa.addTransition(0, Transition{ .symbol = 'a', .dest_index = 1 });
-    try nfa.addTransition(0, Transition{ .symbol = 'b', .dest_index = 2 });
-    try nfa.addTransition(0, Transition{ .symbol = 'c', .dest_index = 3 });
+    try nfa.addTransition(0, Transition.fromChar('a', 1));
+    try nfa.addTransition(0, Transition.fromChar('b', 2));
+    try nfa.addTransition(0, Transition.fromChar('c', 3));
 
     try nfa.addEpsTransition(1, 4);
     try nfa.addEpsTransition(2, 4);
@@ -324,7 +364,7 @@ test "loop" {
     }
     nfa.setAcceptingState(2);
 
-    try nfa.addTransition(0, Transition{ .symbol = 'a', .dest_index = 1 });
+    try nfa.addTransition(0, Transition.fromChar( 'a', 1 ));
     try nfa.addEpsTransition(1, 0);
     try nfa.addEpsTransition(1, 2);
 

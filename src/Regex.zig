@@ -134,9 +134,6 @@ pub fn buildNFA(self: *Self) !AutomataBuildResult {
     const cur_state = try nfa.addState(.{});
     const res = try self.parse(&nfa, cur_state, RegexCharacter.EOF);
 
-    // std.debug.print("`{s}`\n", .{self.lexer.input});
-    // std.debug.assert(res.characters_parsed == pattern.len);
-
     nfa.setAcceptingState(res.accepting_state);
 
     return .{
@@ -212,10 +209,7 @@ fn parse(self: *Self, nfa: *NFA, initial_state: u32, parse_until: RegexCharacter
             .Literal => |literal_char| {
                 const new_state = try nfa.addState(.{});
 
-                try nfa.addTransition(cur_state, NFA.Transition{
-                    .symbol = literal_char,
-                    .dest_index = new_state,
-                });
+                try nfa.addTransition(cur_state, NFA.Transition.fromChar(literal_char, new_state));
                 prev_state = cur_state;
                 cur_state = new_state;
             },
