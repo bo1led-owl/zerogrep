@@ -243,8 +243,8 @@ test "basic" {
 }
 
 test "epsilon transition" {
-    //      a        e
-    // (0) ---> (1) ---> ((2))
+    //      a        eps
+    // (0) ---> (1) ----> ((2))
     //
     const allocator = std.testing.allocator;
     var nfa = Self.init(allocator);
@@ -272,11 +272,11 @@ test "epsilon transition" {
 test "branching" {
     //      a
     //    ----> (1) --\
-    //  /              \ e
-    //  |   b        e  \
+    //  /              \ eps
+    //  |   b       eps \
     // (0) ---> (2) -----> ((4))
     //  |               /
-    //  \   c          / e
+    //  \   c          / eps
     //   -----> (3) --/
 
     const allocator = std.testing.allocator;
@@ -311,10 +311,10 @@ test "branching" {
 }
 
 test "loop" {
-    //      a        e
+    //      a        eps
     // (0) ---> (1) ---> ((2))
     //  ^ -------
-    //       e
+    //      eps
 
     const allocator = std.testing.allocator;
     var nfa = Self.init(allocator);
