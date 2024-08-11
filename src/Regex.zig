@@ -31,7 +31,6 @@ const Lexer = struct {
         if (self.input.len == 0) return null;
 
         defer self.input = self.input[1..];
-        // std.debug.print("{c}", .{self.input[0]});
         return self.input[0];
     }
 
@@ -58,11 +57,13 @@ const Lexer = struct {
                 '(' => RegexCharacter.LParen,
                 ')' => RegexCharacter.RParen,
                 '|' => RegexCharacter.Pipe,
+                '^' => RegexCharacter.Caret,
+                '$' => RegexCharacter.Dollar,
                 else => |c| RegexCharacter{ .Literal = c },
             };
         } else {
             return switch (cur_char.?) {
-                '(', ')', '|', '*', '+', '?' => |c| RegexCharacter{ .Literal = c },
+                '(', ')', '|', '*', '+', '?', '^', '$' => |c| RegexCharacter{ .Literal = c },
                 else => CharError.UnknownEscapeSequence,
             };
         }
@@ -73,10 +74,14 @@ const RegexCharacter = union(enum) {
     EOF,
     LParen,
     RParen,
+    LBracket,
+    RBracket,
     Pipe,
     QuestionMark,
     Asterisk,
     Plus,
+    Caret,
+    Dollar,
     Literal: u8,
     Erroneous,
 
@@ -170,6 +175,18 @@ fn parse(self: *Self, nfa: *NFA, initial_state: u32, parse_until: RegexCharacter
 
         switch (regex_char) {
             .EOF => break,
+            .Caret => {
+                nfa.markAtLineStart(cur_state);
+            },
+            .Dollar => {
+                nfa.markAtLineEnd(cur_state);
+            },
+            .LBracket => {
+                // _ = self.parseBracketExpr();
+            },
+            .RBracket => {
+                try self.errors.addError("Regex error: unmatched `]`", .{});
+            },
             .LParen => {
                 const result = try self.parse(nfa, cur_state, RegexCharacter.RParen);
                 prev_state = cur_state;
@@ -482,6 +499,92 @@ test "optionals" {
         try std.testing.expect(!try nfa.match(&nfa_stack, "foo"));
         try std.testing.expect(!try nfa.match(&nfa_stack, "baz"));
         try std.testing.expect(!try nfa.match(&nfa_stack, "foobaz"));
+    }
+}
+
+test "anchors" {
+    const allocator = std.testing.allocator;
+    var arena_allocator = std.heap.ArenaAllocator.init(allocator);
+    const arena = arena_allocator.allocator();
+    defer arena_allocator.deinit();
+
+    var nfa_stack = NFA.Stack.init(allocator);
+    defer nfa_stack.deinit();
+
+    {
+        var errors = Errors.init(allocator, arena);
+        defer errors.deinit();
+
+        var regex = Self.init(allocator, &errors, "^ab");
+        const nfa_result = try regex.buildNFA();
+        try std.testing.expect(nfa_result.errors_occured == (errors.count() != 0));
+        try std.testing.expect(!nfa_result.errors_occured);
+
+        var nfa = nfa_result.automata;
+        defer nfa.deinit();
+
+        try std.testing.expect(try nfa.match(&nfa_stack, "ab"));
+        try std.testing.expect(try nfa.match(&nfa_stack, "abba"));
+        try std.testing.expect(!try nfa.match(&nfa_stack, ""));
+        try std.testing.expect(!try nfa.match(&nfa_stack, "bab"));
+        try std.testing.expect(!try nfa.match(&nfa_stack, "foo"));
+    }
+    {
+        var errors = Errors.init(allocator, arena);
+        defer errors.deinit();
+
+        var regex = Self.init(allocator, &errors, "ab$");
+        const nfa_result = try regex.buildNFA();
+        try std.testing.expect(nfa_result.errors_occured == (errors.count() != 0));
+        try std.testing.expect(!nfa_result.errors_occured);
+
+        var nfa = nfa_result.automata;
+        defer nfa.deinit();
+
+        try std.testing.expect(try nfa.match(&nfa_stack, "ab"));
+        try std.testing.expect(try nfa.match(&nfa_stack, "baab"));
+        try std.testing.expect(try nfa.match(&nfa_stack, "bab"));
+        try std.testing.expect(!try nfa.match(&nfa_stack, ""));
+        try std.testing.expect(!try nfa.match(&nfa_stack, "aba"));
+        try std.testing.expect(!try nfa.match(&nfa_stack, "foo"));
+    }
+
+    {
+        var errors = Errors.init(allocator, arena);
+        defer errors.deinit();
+
+        var regex = Self.init(allocator, &errors, "^a^b");
+        const nfa_result = try regex.buildNFA();
+        try std.testing.expect(nfa_result.errors_occured == (errors.count() != 0));
+        try std.testing.expect(!nfa_result.errors_occured);
+
+        var nfa = nfa_result.automata;
+        defer nfa.deinit();
+
+        try std.testing.expect(!try nfa.match(&nfa_stack, "ab"));
+        try std.testing.expect(!try nfa.match(&nfa_stack, "abba"));
+        try std.testing.expect(!try nfa.match(&nfa_stack, ""));
+        try std.testing.expect(!try nfa.match(&nfa_stack, "bab"));
+        try std.testing.expect(!try nfa.match(&nfa_stack, "foo"));
+    }
+    {
+        var errors = Errors.init(allocator, arena);
+        defer errors.deinit();
+
+        var regex = Self.init(allocator, &errors, "a$b$");
+        const nfa_result = try regex.buildNFA();
+        try std.testing.expect(nfa_result.errors_occured == (errors.count() != 0));
+        try std.testing.expect(!nfa_result.errors_occured);
+
+        var nfa = nfa_result.automata;
+        defer nfa.deinit();
+
+        try std.testing.expect(!try nfa.match(&nfa_stack, "ab"));
+        try std.testing.expect(!try nfa.match(&nfa_stack, "baab"));
+        try std.testing.expect(!try nfa.match(&nfa_stack, "bab"));
+        try std.testing.expect(!try nfa.match(&nfa_stack, ""));
+        try std.testing.expect(!try nfa.match(&nfa_stack, "aba"));
+        try std.testing.expect(!try nfa.match(&nfa_stack, "foo"));
     }
 }
 

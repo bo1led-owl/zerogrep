@@ -19,13 +19,24 @@ pub fn deinit(self: *Self) void {
 }
 
 pub fn debugPrint(nfa: Self) void {
-    std.debug.print("{any}\n", .{nfa});
+    std.debug.print("accepting: {d}\n", .{nfa.accepting_state});
     for (0.., nfa.states.items) |i, state| {
-        std.debug.print("{d} {any}\n", .{ i, state });
+        std.debug.print("State {d}\n", .{i});
+        if (state.at_line_start) {
+            std.debug.print("anchored ^\n", .{});
+        }
+        if (state.at_line_end) {
+            std.debug.print("anchored $\n", .{});
+        }
+
         for (0..state.transitions.len) |j| {
             const transition = state.transitions.get(j);
 
-            std.debug.print("\t{c} -> {d}\n", .{ transition.symbol, transition.dest_index });
+            if (transition.range.bot == transition.range.top) {
+                std.debug.print("\t{c} -> {d}\n", .{ transition.range.bot, transition.dest_index });
+            } else {
+                std.debug.print("\t{c}-{c} -> {d}\n", .{ transition.range.bot, transition.range.top, transition.dest_index });
+            }
         }
 
         for (state.epsilon_transitions.items) |eps_transition| {
@@ -63,10 +74,7 @@ const StackFrame = struct {
     epsilon_iter: TransitionIterator,
 };
 
-fn walk(self: *const Self, stack: *Stack, input: []const u8) !bool {
-    // var stack = std.ArrayListUnmanaged(){};
-    // defer stack.deinit(allocator);
-
+fn walk(self: *const Self, stack: *Stack, input: []const u8, at_line_start: bool) !bool {
     try stack.append(.{
         .state_index = 0,
         .input_start = 0,
@@ -79,6 +87,16 @@ fn walk(self: *const Self, stack: *Stack, input: []const u8) !bool {
         const char_index = stack.getLast().input_start;
         var iter = &stack.*.items[stack.items.len - 1].iter;
         var epsilon_iter = &stack.*.items[stack.items.len - 1].epsilon_iter;
+
+        if (self.states.items[state_index].at_line_start and (!at_line_start or char_index != 0)) {
+            _ = stack.popOrNull();
+            continue;
+        }
+
+        if (self.states.items[state_index].at_line_end and char_index < input.len) {
+            _ = stack.popOrNull();
+            continue;
+        }
 
         if (self.accepting_state == state_index) {
             return true;
@@ -138,12 +156,14 @@ pub fn match(self: *const Self, stack: *Stack, line: []const u8) !bool {
     // }
 
     for (0..line.len) |i| {
-        if (try self.walk(stack, line[i..])) {
+        // std.debug.print("{s}\n", .{line[i..]});
+
+        if (try self.walk(stack, line[i..], i == 0)) {
             return true;
         }
         stack.clearRetainingCapacity();
     } else {
-        return try self.walk(stack, "");
+        return try self.walk(stack, "", true);
     }
 
     return false;
@@ -153,6 +173,14 @@ pub fn match(self: *const Self, stack: *Stack, line: []const u8) !bool {
 pub fn addState(self: *Self, state: State) !u32 {
     try self.states.append(self.allocator, state);
     return @intCast(self.states.items.len - 1);
+}
+
+pub fn markAtLineStart(self: *Self, i: u32) void {
+    self.states.items[i].at_line_start = true;
+}
+
+pub fn markAtLineEnd(self: *Self, i: u32) void {
+    self.states.items[i].at_line_end = true;
 }
 
 pub fn setAcceptingState(self: *Self, i: u32) void {
@@ -222,11 +250,15 @@ pub const TransitionIterator = struct {
 pub const State = struct {
     transitions: std.MultiArrayList(Transition) = .{},
     epsilon_transitions: std.ArrayListUnmanaged(u32) = .{},
+    at_line_start: bool = false,
+    at_line_end: bool = false,
 
     pub fn clone(self: State, allocator: std.mem.Allocator) !State {
         return State{
             .transitions = try self.transitions.clone(allocator),
             .epsilon_transitions = try self.epsilon_transitions.clone(allocator),
+            .at_line_start = self.at_line_start,
+            .at_line_end = self.at_line_end,
         };
     }
 
@@ -237,7 +269,6 @@ pub const State = struct {
 
     pub fn addTransition(self: *State, allocator: std.mem.Allocator, transition: Transition) !void {
         const i = std.sort.lowerBound(
-            // Transition,
             Transition.Range,
             transition.range,
             self.transitions.items(.range),
@@ -364,7 +395,7 @@ test "loop" {
     }
     nfa.setAcceptingState(2);
 
-    try nfa.addTransition(0, Transition.fromChar( 'a', 1 ));
+    try nfa.addTransition(0, Transition.fromChar('a', 1));
     try nfa.addEpsTransition(1, 0);
     try nfa.addEpsTransition(1, 2);
 
