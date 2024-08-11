@@ -79,14 +79,14 @@ fn walk(self: *const Self, stack: *Stack, input: []const u8) !bool {
         }
 
         if (epsilon_iter.next()) |dest| {
-            // std.debug.print("eps {d}: {d}\n", .{ state_index, dest });
+            // std.debug.print("{d} eps -> {d}\n", .{ state_index, dest });
 
-            const new_iter = if (char_index + 1 < input.len) self.getTransitions(dest, input[char_index + 1]) else TransitionIterator{};
+            const new_iter = if (char_index < input.len) self.getTransitions(dest, input[char_index]) else TransitionIterator{};
             const new_eps_iter = self.getEpsTransitions(dest);
 
             try stack.append(.{
                 .state_index = dest,
-                .input_start = char_index + 1,
+                .input_start = char_index,
                 .iter = new_iter,
                 .epsilon_iter = new_eps_iter,
             });
@@ -99,7 +99,7 @@ fn walk(self: *const Self, stack: *Stack, input: []const u8) !bool {
         }
 
         if (iter.next()) |dest| {
-            // std.debug.print("{d}: {d}\n", .{ state_index, dest });
+            // std.debug.print("{d} -> {d}\n", .{ state_index, dest });
 
             const new_iter = if (char_index + 1 < input.len) self.getTransitions(dest, input[char_index + 1]) else TransitionIterator{};
             const new_eps_iter = self.getEpsTransitions(dest);
@@ -131,16 +131,15 @@ pub fn match(self: *const Self, stack: *Stack, line: []const u8) !bool {
     //     });
     // }
 
-    if (try self.walk(stack, "")) {
-        return true;
-    }
-
     for (0..line.len) |i| {
         if (try self.walk(stack, line[i..])) {
             return true;
         }
         stack.clearRetainingCapacity();
+    } else {
+        return try self.walk(stack, "");
     }
+
     return false;
 }
 

@@ -190,6 +190,7 @@ fn parse(self: *Self, nfa: *NFA, initial_state: u32, parse_until: RegexCharacter
                 const new_state = try nfa.addState(.{});
 
                 try nfa.addEpsTransition(cur_state, prev_state);
+                try nfa.addEpsTransition(cur_state, new_state);
                 try nfa.addEpsTransition(prev_state, new_state);
                 prev_state = cur_state;
                 cur_state = new_state;
@@ -204,6 +205,7 @@ fn parse(self: *Self, nfa: *NFA, initial_state: u32, parse_until: RegexCharacter
                     last_state = try nfa.addState(try nfa.states.items[state].clone(self.gpa));
                 }
                 try nfa.addEpsTransition(cur_state, last_state);
+                try nfa.addEpsTransition(cur_state, cur_state + 1);
                 prev_state = cur_state;
                 cur_state = last_state;
             },
@@ -240,4 +242,200 @@ fn parse(self: *Self, nfa: *NFA, initial_state: u32, parse_until: RegexCharacter
     return .{
         .accepting_state = cur_state,
     };
+}
+
+test "basic" {
+    const allocator = std.testing.allocator;
+    var arena_allocator = std.heap.ArenaAllocator.init(allocator);
+    const arena = arena_allocator.allocator();
+    defer arena_allocator.deinit();
+
+    var errors = Errors.init(allocator, arena);
+    defer errors.deinit();
+
+    var regex = Self.init(allocator, &errors, "foobar");
+    const nfa_result = try regex.buildNFA();
+    try std.testing.expect(nfa_result.errors_occured == (errors.count() != 0));
+    try std.testing.expect(!nfa_result.errors_occured);
+
+    var nfa = nfa_result.automata;
+    defer nfa.deinit();
+
+    var nfa_stack = NFA.Stack.init(allocator);
+    defer nfa_stack.deinit();
+
+    try std.testing.expect(try nfa.match(&nfa_stack, "foobar"));
+    try std.testing.expect(try nfa.match(&nfa_stack, "foobarbaz"));
+    try std.testing.expect(try nfa.match(&nfa_stack, "bazfoobar"));
+    try std.testing.expect(!try nfa.match(&nfa_stack, ""));
+    try std.testing.expect(!try nfa.match(&nfa_stack, "foo"));
+    try std.testing.expect(!try nfa.match(&nfa_stack, "bar"));
+    try std.testing.expect(!try nfa.match(&nfa_stack, "baz"));
+}
+
+test "group basic" {
+    const allocator = std.testing.allocator;
+    var arena_allocator = std.heap.ArenaAllocator.init(allocator);
+    const arena = arena_allocator.allocator();
+    defer arena_allocator.deinit();
+
+    var errors = Errors.init(allocator, arena);
+    defer errors.deinit();
+
+    var regex = Self.init(allocator, &errors, "(fo(oba)r)");
+    const nfa_result = try regex.buildNFA();
+    try std.testing.expect(nfa_result.errors_occured == (errors.count() != 0));
+    try std.testing.expect(!nfa_result.errors_occured);
+
+    var nfa = nfa_result.automata;
+    defer nfa.deinit();
+
+    var nfa_stack = NFA.Stack.init(allocator);
+    defer nfa_stack.deinit();
+
+    try std.testing.expect(try nfa.match(&nfa_stack, "foobar"));
+    try std.testing.expect(try nfa.match(&nfa_stack, "foobarbaz"));
+    try std.testing.expect(try nfa.match(&nfa_stack, "bazfoobar"));
+    try std.testing.expect(!try nfa.match(&nfa_stack, ""));
+    try std.testing.expect(!try nfa.match(&nfa_stack, "foo"));
+    try std.testing.expect(!try nfa.match(&nfa_stack, "bar"));
+    try std.testing.expect(!try nfa.match(&nfa_stack, "baz"));
+}
+
+test "alternatives" {
+    const allocator = std.testing.allocator;
+    var arena_allocator = std.heap.ArenaAllocator.init(allocator);
+    const arena = arena_allocator.allocator();
+    defer arena_allocator.deinit();
+
+    var errors = Errors.init(allocator, arena);
+    defer errors.deinit();
+
+    var regex = Self.init(allocator, &errors, "foo|bar|baz");
+    const nfa_result = try regex.buildNFA();
+    try std.testing.expect(nfa_result.errors_occured == (errors.count() != 0));
+    try std.testing.expect(!nfa_result.errors_occured);
+
+    var nfa = nfa_result.automata;
+    defer nfa.deinit();
+
+    var nfa_stack = NFA.Stack.init(allocator);
+    defer nfa_stack.deinit();
+
+    try std.testing.expect(try nfa.match(&nfa_stack, "foobar"));
+    try std.testing.expect(try nfa.match(&nfa_stack, "foobarbaz"));
+    try std.testing.expect(try nfa.match(&nfa_stack, "bazfoobar"));
+    try std.testing.expect(try nfa.match(&nfa_stack, "foo"));
+    try std.testing.expect(try nfa.match(&nfa_stack, "bar"));
+    try std.testing.expect(try nfa.match(&nfa_stack, "baz"));
+    try std.testing.expect(!try nfa.match(&nfa_stack, ""));
+    try std.testing.expect(!try nfa.match(&nfa_stack, "random"));
+    try std.testing.expect(!try nfa.match(&nfa_stack, "word"));
+}
+
+test "repeating single char" {
+    const allocator = std.testing.allocator;
+    var arena_allocator = std.heap.ArenaAllocator.init(allocator);
+    const arena = arena_allocator.allocator();
+    defer arena_allocator.deinit();
+
+    var nfa_stack = NFA.Stack.init(allocator);
+    defer nfa_stack.deinit();
+    {
+        var errors = Errors.init(allocator, arena);
+        defer errors.deinit();
+
+        var regex = Self.init(allocator, &errors, "foo*");
+        const nfa_result = try regex.buildNFA();
+        try std.testing.expect(nfa_result.errors_occured == (errors.count() != 0));
+        try std.testing.expect(!nfa_result.errors_occured);
+
+        var nfa = nfa_result.automata;
+        defer nfa.deinit();
+
+        try std.testing.expect(try nfa.match(&nfa_stack, "foobar"));
+        try std.testing.expect(try nfa.match(&nfa_stack, "foobarbaz"));
+        try std.testing.expect(try nfa.match(&nfa_stack, "bazfoobar"));
+        try std.testing.expect(try nfa.match(&nfa_stack, "foo"));
+        try std.testing.expect(try nfa.match(&nfa_stack, "fo"));
+        try std.testing.expect(try nfa.match(&nfa_stack, "fooooo"));
+        try std.testing.expect(!try nfa.match(&nfa_stack, ""));
+        try std.testing.expect(!try nfa.match(&nfa_stack, "f"));
+        try std.testing.expect(!try nfa.match(&nfa_stack, "bar"));
+        try std.testing.expect(!try nfa.match(&nfa_stack, "baz"));
+    }
+    {
+        var errors = Errors.init(allocator, arena);
+        defer errors.deinit();
+
+        var regex = Self.init(allocator, &errors, "foo+");
+        const nfa_result = try regex.buildNFA();
+        try std.testing.expect(nfa_result.errors_occured == (errors.count() != 0));
+        try std.testing.expect(!nfa_result.errors_occured);
+
+        var nfa = nfa_result.automata;
+        defer nfa.deinit();
+
+        try std.testing.expect(try nfa.match(&nfa_stack, "foobar"));
+        try std.testing.expect(try nfa.match(&nfa_stack, "foobarbaz"));
+        try std.testing.expect(try nfa.match(&nfa_stack, "bazfoobar"));
+        try std.testing.expect(try nfa.match(&nfa_stack, "foo"));
+        try std.testing.expect(try nfa.match(&nfa_stack, "fooo"));
+        try std.testing.expect(try nfa.match(&nfa_stack, "fooooo"));
+        try std.testing.expect(!try nfa.match(&nfa_stack, ""));
+        try std.testing.expect(!try nfa.match(&nfa_stack, "f"));
+        try std.testing.expect(!try nfa.match(&nfa_stack, "bar"));
+        try std.testing.expect(!try nfa.match(&nfa_stack, "baz"));
+    }
+}
+
+test "repeating group" {
+    const allocator = std.testing.allocator;
+    var arena_allocator = std.heap.ArenaAllocator.init(allocator);
+    const arena = arena_allocator.allocator();
+    defer arena_allocator.deinit();
+
+    var nfa_stack = NFA.Stack.init(allocator);
+    defer nfa_stack.deinit();
+
+    {
+        var errors = Errors.init(allocator, arena);
+        defer errors.deinit();
+
+        var regex = Self.init(allocator, &errors, "foo(bar)*baz");
+        const nfa_result = try regex.buildNFA();
+        try std.testing.expect(nfa_result.errors_occured == (errors.count() != 0));
+        try std.testing.expect(!nfa_result.errors_occured);
+
+        var nfa = nfa_result.automata;
+        defer nfa.deinit();
+
+        try std.testing.expect(try nfa.match(&nfa_stack, "foobaz"));
+        try std.testing.expect(try nfa.match(&nfa_stack, "foobarbaz"));
+        try std.testing.expect(try nfa.match(&nfa_stack, "foobarbarbarbaz"));
+        try std.testing.expect(!try nfa.match(&nfa_stack, ""));
+        try std.testing.expect(!try nfa.match(&nfa_stack, "foo"));
+        try std.testing.expect(!try nfa.match(&nfa_stack, "bar"));
+        try std.testing.expect(!try nfa.match(&nfa_stack, "baz"));
+    }
+    {
+        var errors = Errors.init(allocator, arena);
+        defer errors.deinit();
+
+        var regex = Self.init(allocator, &errors, "foo(bar)+baz");
+        const nfa_result = try regex.buildNFA();
+        try std.testing.expect(nfa_result.errors_occured == (errors.count() != 0));
+        try std.testing.expect(!nfa_result.errors_occured);
+
+        var nfa = nfa_result.automata;
+        defer nfa.deinit();
+
+        try std.testing.expect(try nfa.match(&nfa_stack, "foobarbaz"));
+        try std.testing.expect(try nfa.match(&nfa_stack, "foobarbarbarbaz"));
+        try std.testing.expect(!try nfa.match(&nfa_stack, ""));
+        try std.testing.expect(!try nfa.match(&nfa_stack, "foo"));
+        try std.testing.expect(!try nfa.match(&nfa_stack, "bar"));
+        try std.testing.expect(!try nfa.match(&nfa_stack, "baz"));
+        try std.testing.expect(!try nfa.match(&nfa_stack, "foobaz"));
+    }
 }
