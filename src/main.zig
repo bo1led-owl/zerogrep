@@ -1,8 +1,8 @@
 const std = @import("std");
 const cli = @import("cli.zig");
+
 const Regex = @import("Regex.zig");
 const NFA = @import("NFA.zig");
-
 const Errors = @import("Errors.zig");
 
 const KiB = 1024;
@@ -13,7 +13,8 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
     defer {
-        std.debug.assert(gpa.deinit() != .leak);
+        const status = gpa.deinit();
+        std.debug.assert(status != .leak);
     }
 
     var arena = std.heap.ArenaAllocator.init(allocator);
