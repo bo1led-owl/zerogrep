@@ -267,6 +267,13 @@ pub const State = struct {
         };
     }
 
+    pub fn cloneWithoutAnchors(self: State, allocator: std.mem.Allocator) !State {
+        return State{
+            .transitions = try self.transitions.clone(allocator),
+            .epsilon_transitions = try self.epsilon_transitions.clone(allocator),
+        };
+    }
+
     pub fn deinit(self: *State, allocator: std.mem.Allocator) void {
         self.transitions.deinit(allocator);
         self.epsilon_transitions.deinit(allocator);
