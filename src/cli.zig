@@ -32,10 +32,11 @@ pub const ANSI = struct {
 pub fn printHelp(writer: anytype) !void {
     try writer.writeAll(
         \\Usage:
-        \\zg [OPTION]... <PATTERN> [FILE]...
+        \\  zg [OPTION]... <PATTERN> [FILE]...
+        \\
         \\Options:
         \\  -h, --help: print this message
-        \\  -D, --data-only: print only matching strings, not filenames or line numbers
+        \\  -D, --data-only: print only matching lines, not filenames or line numbers
     );
 }
 

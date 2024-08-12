@@ -47,14 +47,14 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator) !Errors {
     var args = try cli.Args.parse(gpa, &errors);
     defer args.deinit(gpa);
 
-    if (errors.count() != 0) {
-        try errors.addError("Errors occured, use `--help` to see the guide", .{});
-        return errors;
-    }
-
     if (args.print_help) {
         try cli.printHelp(stdout);
         try bw_stdout.flush();
+        return errors;
+    }
+
+    if (errors.count() != 0) {
+        try errors.addError("Errors occured, use `--help` to see the guide", .{});
         return errors;
     }
 
