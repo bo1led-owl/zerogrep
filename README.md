@@ -3,11 +3,10 @@
 A `grep` with custom regex engine written in Zig
 
 ## Usage
+    zg [flags]... PATTERN FILES...
 
-  zg [flags]... PATTERN FILES...
-
-  or instead of `FILES` you can redirect `zg`'s input and it will read from stdin.
-  For more details see `zg --help`
+or instead of `FILES` you can redirect `zg`'s input and it will read from stdin.
+For more details see `zg --help`
 
 ## Supported regex features
 - Grouping
