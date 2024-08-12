@@ -52,7 +52,7 @@ fn getTransitions(self: *const Self, from: u32, key: u8) TransitionIterator {
         Transition.Range{ .bot = key, .top = key },
         state.transitions.items(.range),
         {},
-        Transition.Range.lessThan,
+        Transition.Range.searchLessThan,
     );
 
     return TransitionIterator{
@@ -207,6 +207,11 @@ pub const Transition = struct {
                 return lhs.bot < rhs.bot;
             }
             return lhs.top < rhs.top;
+        }
+
+        pub fn searchLessThan(ctx: void, lhs: Range, rhs: Range) bool {
+            _ = ctx;
+            return lhs.top < rhs.bot;
         }
     };
 
