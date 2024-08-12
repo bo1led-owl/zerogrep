@@ -9,7 +9,7 @@ or instead of `FILES` you can redirect `zg`'s input and it will read from stdin.
 For more details see `zg --help`
 
 ## Supported regex features
-- Grouping
+- Grouping (`foo(bar)+baz`)
 - Repetition (`*` and `+`)
 - Optionals (`?`)
 - Anchors (`^` and `$`)
