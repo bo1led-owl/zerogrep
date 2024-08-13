@@ -95,7 +95,7 @@ pub const Args = struct {
             try result.errors.addError("No search pattern provided", .{}, {});
         }
 
-        if (filenames.items.len == 0) {
+        if (result.args.filenames.len == 0) {
             if (!std.posix.isatty(std.io.getStdIn().handle)) {
                 result.args.from_stdin = true;
                 result.args.data_only = true;
