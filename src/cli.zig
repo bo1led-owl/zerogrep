@@ -1,5 +1,5 @@
 const std = @import("std");
-const Errors = @import("Errors.zig");
+const Errors = @import("errors.zig").Errors;
 
 pub const ANSI = struct {
     fn genANSILiteral(comptime code: u8) []const u8 {
@@ -49,16 +49,34 @@ pub const Args = struct {
     from_stdin: bool = false,
     filenames: []const []const u8 = &[_][]u8{},
 
-    pub fn parse(allocator: std.mem.Allocator, errors: *Errors) !Args {
-        var self = Self{};
+    pub const Result = struct {
+        args: Args,
+        errors: Errors(void),
 
-        var iter = try std.process.argsWithAllocator(allocator);
+        pub fn init(gpa: std.mem.Allocator, arena: std.mem.Allocator) Result {
+            return .{
+                .args = .{},
+                .errors = Errors(void).init(gpa, arena),
+            };
+        }
+    };
+
+    pub fn parse(gpa: std.mem.Allocator, arena: std.mem.Allocator) !Result {
+        var result = Result.init(gpa, arena);
+
+        var iter = try std.process.argsWithAllocator(gpa);
         defer iter.deinit();
 
         _ = iter.skip(); // skip executable name
         const pattern = while (iter.next()) |arg| {
-            if (dashCount(arg) > 0) {
-                try self.parseOption(arg, errors);
+            if (std.mem.startsWith(u8, arg, "-")) {
+                if (std.mem.eql(u8, "-D", arg) or std.mem.eql(u8, "--data-only", arg)) {
+                    result.args.data_only = true;
+                } else if (std.mem.eql(u8, "-h", arg) or std.mem.eql(u8, "--help", arg)) {
+                    result.args.print_help = true;
+                } else {
+                    try result.errors.addError("Unknown option: `{s}`, use `--help` to see the guide", .{arg}, {});
+                }
             } else {
                 break arg;
             }
@@ -66,49 +84,27 @@ pub const Args = struct {
 
         var filenames = std.ArrayListUnmanaged([]const u8){};
         while (iter.next()) |filename| {
-            try filenames.append(allocator, filename);
+            try filenames.append(gpa, filename);
         }
 
-        filenames.shrinkAndFree(allocator, filenames.items.len);
-        self.filenames = filenames.items;
+        result.args.filenames = try filenames.toOwnedSlice(gpa);
 
         if (pattern) |pat| {
-            self.pattern = pat;
+            result.args.pattern = pat;
         } else {
-            try errors.addError("No search pattern provided", .{});
+            try result.errors.addError("No search pattern provided", .{}, {});
         }
 
         if (filenames.items.len == 0) {
-            if (std.posix.isatty(std.io.getStdOut().handle)) {
-                self.from_stdin = true;
-                self.data_only = true;
+            if (!std.posix.isatty(std.io.getStdIn().handle)) {
+                result.args.from_stdin = true;
+                result.args.data_only = true;
             } else {
-                try errors.addError("No input provided", .{});
+                try result.errors.addError("No input provided", .{}, {});
             }
         }
 
-        return self;
-    }
-
-    fn dashCount(arg: []const u8) u8 {
-        var res: u8 = 0;
-        for (arg) |c| {
-            if (c != '-') {
-                break;
-            }
-            res += 1;
-        }
-        return res;
-    }
-
-    fn parseOption(self: *Self, option: []const u8, errors: *Errors) !void {
-        if (std.mem.eql(u8, "-D", option) or std.mem.eql(u8, "--data-only", option)) {
-            self.data_only = true;
-        } else if (std.mem.eql(u8, "-h", option) or std.mem.eql(u8, "--help", option)) {
-            self.print_help = true;
-        } else {
-            try errors.addError("Unknown option: `{s}`, use `--help` to see the guide", .{option});
-        }
+        return result;
     }
 
     pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {

@@ -3,11 +3,17 @@ const cli = @import("cli.zig");
 
 const Regex = @import("Regex.zig");
 const NFA = @import("NFA.zig");
-const Errors = @import("Errors.zig");
+const Errors = @import("errors.zig").Errors;
 
 const KiB = 1024;
 const MiB = 1024 * KiB;
 const GiB = 1024 * MiB;
+
+const ExitCode = enum(u8) {
+    Success = 0,
+    GenericError = 1,
+    IncorrectUsage = 2,
+};
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -24,54 +30,72 @@ pub fn main() !void {
     var bw_stderr = std.io.bufferedWriter(stderr_file);
     const stderr = bw_stderr.writer();
 
-    var errors = run(allocator, arena.allocator()) catch |e| {
+    const code = run(allocator, arena.allocator(), stderr) catch |e| blk: {
         try stderr.print("Error: {s}\n", .{@errorName(e)});
-        try bw_stderr.flush();
-        return;
+        break :blk ExitCode.GenericError;
     };
-    defer errors.deinit();
-
-    for (errors.errors.items) |err| {
-        try stderr.print("{s}\n", .{err});
-    }
     try bw_stderr.flush();
+
+    std.process.exit(@intFromEnum(code));
 }
 
-fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator) !Errors {
-    var errors = Errors.init(gpa, arena);
-
+fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitCode {
     const stdout_file = std.io.getStdOut().writer();
     var bw_stdout = std.io.bufferedWriter(stdout_file);
     const stdout = bw_stdout.writer();
 
-    var args = try cli.Args.parse(gpa, &errors);
+    var args: cli.Args = undefined;
     defer args.deinit(gpa);
 
-    if (args.print_help) {
-        try cli.printHelp(stdout);
-        try bw_stdout.flush();
-        return errors;
-    }
+    {
+        var cli_result = try cli.Args.parse(gpa, arena);
+        defer cli_result.errors.deinit();
 
-    if (errors.count() != 0) {
-        try errors.addError("Errors occured, use `--help` to see the guide", .{});
-        return errors;
+        args = cli_result.args;
+
+        if (args.print_help) {
+            try cli.printHelp(stdout);
+            try bw_stdout.flush();
+            return ExitCode.Success;
+        }
+
+        if (cli_result.errors.count() != 0) {
+            for (cli_result.errors.items()) |err| {
+                try stderr.print("Error: {s}\n", .{err.message});
+            }
+            return ExitCode.IncorrectUsage;
+        }
     }
 
     // var timer = try std.time.Timer.start();
 
-    var regex = Regex.init(gpa, &errors, args.pattern);
-    const nfa_build_result = try regex.buildNFA();
-
-    // const nfa_build_time: f64 = @floatFromInt(timer.read());
-    // std.debug.print("NFA is built in {d:.3}us\n", .{
-    //     nfa_build_time / std.time.ns_per_us,
-    // });
-
-    var nfa = nfa_build_result.automata;
+    var nfa: NFA = undefined;
     defer nfa.deinit();
-    if (nfa_build_result.errors_occured) {
-        return errors;
+
+    {
+        var regex = Regex.init(args.pattern);
+        var nfa_build_result = try regex.buildNFA(gpa, arena);
+        defer nfa_build_result.errors.deinit();
+
+        // const nfa_build_time: f64 = @floatFromInt(timer.read());
+        // std.debug.print("NFA is built in {d:.3}us\n", .{
+        //     nfa_build_time / std.time.ns_per_us,
+        // });
+
+        nfa = nfa_build_result.automata;
+        if (nfa_build_result.errors.count() != 0) {
+            for (nfa_build_result.errors.items()) |err| {
+                try stderr.print("{s}\n", .{args.pattern});
+
+                const span = err.payload;
+
+                try stderr.writeByteNTimes(' ', span.start);
+                try stderr.writeAll(cli.ANSI.Fg.Red ++ cli.ANSI.Bold);
+                try stderr.writeByteNTimes('^', span.end - span.start + 1);
+                try stderr.print(" {s}{s}\n", .{ err.message, cli.ANSI.Reset });
+            }
+            return ExitCode.IncorrectUsage;
+        }
     }
 
     // nfa.debugPrint();
@@ -88,7 +112,7 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator) !Errors {
         const multiple_files = args.filenames.len > 0;
         for (0.., args.filenames) |i, filename| {
             const file = cwd.openFile(filename, .{}) catch |e| {
-                try errors.addError("Error opening `{s}`: {s}\n", .{ filename, @errorName(e) });
+                try stderr.print("Error opening `{s}`: {s}\n", .{ filename, @errorName(e) });
                 continue;
             };
             defer file.close();
@@ -118,8 +142,7 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator) !Errors {
         try handleFile("stdin", &reader, read_buffer, stdout, nfa, &nfa_stack, flags);
     }
     try bw_stdout.flush();
-
-    return errors;
+    return ExitCode.Success;
 }
 
 const HandleFileFlags = struct {
