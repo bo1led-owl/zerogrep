@@ -134,7 +134,7 @@ pub const SourceSpan = struct {
     }
 };
 
-fn handleError(errors: *Errors(SourceSpan), err: CharError, char_index: u32) !RegexCharacter {
+fn handleCharError(errors: *Errors(SourceSpan), err: CharError, char_index: u32) !RegexCharacter {
     switch (err) {
         CharError.TrailingBackslash => {
             try errors.addError("Trailing backslash", .{}, SourceSpan.fromChar(char_index));
@@ -185,7 +185,7 @@ fn parse(self: *Self, gpa: std.mem.Allocator, errors: *Errors(SourceSpan), nfa: 
     var parsed_atom = false;
     var finished_correctly = false;
     while (true) {
-        const regex_char = self.lexer.getChar() catch |err| try handleError(errors, err, self.lexer.cur_index - 1);
+        const regex_char = self.lexer.getChar() catch |err| try handleCharError(errors, err, self.lexer.cur_index - 1);
         if (regex_char.eq(parse_until)) {
             finished_correctly = true;
             if (branches.items.len > 0) {
@@ -320,14 +320,24 @@ fn parse(self: *Self, gpa: std.mem.Allocator, errors: *Errors(SourceSpan), nfa: 
 }
 
 fn parseBracketExpr(self: *Self, gpa: std.mem.Allocator, errors: *Errors(SourceSpan), nfa: *NFA, cur_state: u32, new_state: u32) !void {
-    var char_set = std.ArrayListUnmanaged(u8){};
-    defer char_set.deinit(gpa);
+    const Range = NFA.Transition.Range;
+    var added_ranges = std.ArrayListUnmanaged(Range){};
+    defer added_ranges.deinit(gpa);
 
-    var cur_range_bot: ?u8 = null;
-    var added_ranges: u32 = 0;
+    var cur_range_start: ?u8 = null;
+    var first_char = true;
+    var negate = false;
 
     while (true) {
-        const regex_char = self.lexer.getChar() catch |err| try handleError(errors, err, self.lexer.cur_index - 1);
+        const regex_char = self.lexer.getChar() catch |err| try handleCharError(errors, err, self.lexer.cur_index - 1);
+
+        if (first_char) {
+            if (regex_char.is(RegexCharacter.Caret)) {
+                negate = true;
+                continue;
+            }
+            first_char = false;
+        }
 
         const bracket_expr_char = switch (regex_char) {
             .Caret => RegexCharacter{ .Literal = '^' },
@@ -349,8 +359,8 @@ fn parseBracketExpr(self: *Self, gpa: std.mem.Allocator, errors: *Errors(SourceS
                 break;
             },
             .RBracket => {
-                if (char_set.items.len == 0 and added_ranges == 0) {
-                    try char_set.append(gpa, ']');
+                if (added_ranges.items.len == 0) {
+                    try added_ranges.append(gpa, Range{ .start = ']', .end = ']' });
                 } else {
                     break;
                 }
@@ -358,32 +368,34 @@ fn parseBracketExpr(self: *Self, gpa: std.mem.Allocator, errors: *Errors(SourceS
             .Literal => |literal_char| {
                 const next_char = self.lexer.peekChar() catch .Erroneous;
 
-                if (cur_range_bot == null and next_char.eq(RegexCharacter{ .Literal = '-' })) {
-                    cur_range_bot = literal_char;
-                } else if (literal_char == '-' and cur_range_bot != null) {
-                    const c = cur_range_bot.?;
+                if (cur_range_start == null and next_char.eq(RegexCharacter{ .Literal = '-' })) {
+                    cur_range_start = literal_char;
+                } else if (literal_char == '-' and cur_range_start != null) {
+                    const c = cur_range_start.?;
 
                     if (!next_char.is(.Literal)) {
-                        try sortedInsert(gpa, &char_set, c);
-                        try sortedInsert(gpa, &char_set, '-');
+                        // try sortedInsert(gpa, &char_set, c);
+                        // try sortedInsert(gpa, &char_set, '-');
+                        try added_ranges.append(gpa, Range{ .start = c, .end = c });
+                        try added_ranges.append(gpa, Range{ .start = '-', .end = '-' });
                         continue;
                     }
 
                     const l = next_char.Literal;
                     if (l < c) {
                         try errors.addError(
-                            "Range top `{c}` is less than bottom `{c}`",
+                            "Range end `{c}` is less than start `{c}`",
                             .{ l, c },
                             .{ .start = self.lexer.cur_index - 2, .end = self.lexer.cur_index },
                         );
                     } else {
                         _ = self.lexer.getChar() catch unreachable;
-                        try nfa.addTransition(cur_state, NFA.Transition.fromRange(c, l, new_state));
-                        added_ranges += 1;
+                        try added_ranges.append(gpa, Range{ .start = c, .end = l });
                     }
-                    cur_range_bot = null;
+                    cur_range_start = null;
                 } else {
-                    try sortedInsert(gpa, &char_set, literal_char);
+                    // try sortedInsert(gpa, &char_set, literal_char);
+                    try added_ranges.append(gpa, Range{ .start = literal_char, .end = literal_char });
                 }
             },
             .Erroneous => {},
@@ -391,25 +403,36 @@ fn parseBracketExpr(self: *Self, gpa: std.mem.Allocator, errors: *Errors(SourceS
         }
     }
 
-    cur_range_bot = null;
-    var cur_range_top: ?u8 = null;
+    // std.mem.sort(Range, added_ranges.items, {}, Range.lessThan);
 
-    for (char_set.items) |c| {
-        if (cur_range_bot == null) {
-            cur_range_bot = c;
-        }
-
-        if (cur_range_top) |top| {
-            if (c - top > 1) {
-                try nfa.addTransition(cur_state, NFA.Transition.fromRange(cur_range_bot.?, top, new_state));
-                cur_range_bot = c;
-            }
-        }
-        cur_range_top = c;
+    var charset = std.bit_set.ArrayBitSet(usize, 256).initEmpty();
+    for (added_ranges.items) |r| {
+        charset.setRangeValue(.{ .start = r.start, .end = r.end + 1 }, true);
     }
 
-    if (cur_range_bot != null and cur_range_top != null) {
-        try nfa.addTransition(cur_state, NFA.Transition.fromRange(cur_range_bot.?, cur_range_top.?, new_state));
+    if (negate) {
+        charset.toggleAll();
+    }
+
+    cur_range_start = null;
+    var cur_range_end: u8 = undefined;
+    for (0..256) |i| {
+        if (charset.isSet(i)) {
+            if (cur_range_start == null) {
+                cur_range_start = @as(u8, @intCast(i));
+            }
+
+            cur_range_end = @as(u8, @intCast(i));
+        } else if (cur_range_start) |start| {
+            std.debug.assert(start <= cur_range_end);
+            try nfa.addTransition(cur_state, NFA.Transition.fromRange(start, cur_range_end, new_state));
+            cur_range_start = null;
+        }
+    }
+
+    if (cur_range_start) |start| {
+        std.debug.assert(start <= cur_range_end);
+        try nfa.addTransition(cur_state, NFA.Transition.fromRange(start, cur_range_end, new_state));
     }
 }
 
@@ -777,6 +800,24 @@ test "bracket expressions" {
         }
     }
     {
+        var regex = Self.init("[^a-zA-Z]");
+        var nfa_result = try regex.buildNFA(allocator, arena);
+        try std.testing.expect(nfa_result.errors.count() == 0);
+
+        defer nfa_result.errors.deinit();
+
+        var nfa = nfa_result.automata;
+        defer nfa.deinit();
+
+        for (std.math.minInt(u8)..std.math.maxInt(u8)) |c| {
+            if ('a' <= c and c <= 'z' or 'A' <= c and c <= 'Z') {
+                try std.testing.expect(!try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+            } else {
+                try std.testing.expect(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+            }
+        }
+    }
+    {
         var regex = Self.init("[badcef]");
         var nfa_result = try regex.buildNFA(allocator, arena);
         try std.testing.expect(nfa_result.errors.count() == 0);
@@ -794,6 +835,26 @@ test "bracket expressions" {
         }
         for ('f' + 1..std.math.maxInt(u8)) |c| {
             try std.testing.expect(!try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+        }
+    }
+    {
+        var regex = Self.init("[^badcef]");
+        var nfa_result = try regex.buildNFA(allocator, arena);
+        try std.testing.expect(nfa_result.errors.count() == 0);
+
+        defer nfa_result.errors.deinit();
+
+        var nfa = nfa_result.automata;
+        defer nfa.deinit();
+
+        for ('a'..'f' + 1) |c| {
+            try std.testing.expect(!try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+        }
+        for (std.math.minInt(u8)..'a') |c| {
+            try std.testing.expect(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+        }
+        for ('f' + 1..std.math.maxInt(u8)) |c| {
+            try std.testing.expect(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
         }
     }
     {

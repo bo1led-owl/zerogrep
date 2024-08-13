@@ -32,10 +32,10 @@ pub fn debugPrint(nfa: Self) void {
         for (0..state.transitions.len) |j| {
             const transition = state.transitions.get(j);
 
-            if (transition.range.bot == transition.range.top) {
-                std.debug.print("\t{c} -> {d}\n", .{ transition.range.bot, transition.dest_index });
+            if (transition.range.start == transition.range.end) {
+                std.debug.print("\t{c} -> {d}\n", .{ transition.range.start, transition.dest_index });
             } else {
-                std.debug.print("\t{c}-{c} -> {d}\n", .{ transition.range.bot, transition.range.top, transition.dest_index });
+                std.debug.print("\t{d}-{d} -> {d}\n", .{ transition.range.start, transition.range.end, transition.dest_index });
             }
         }
 
@@ -49,7 +49,7 @@ fn getTransitions(self: *const Self, from: u32, key: u8) TransitionIterator {
     const state = self.states.items[from];
     const range = std.sort.equalRange(
         Transition.Range,
-        Transition.Range{ .bot = key, .top = key },
+        Transition.Range{ .start = key, .end = key },
         state.transitions.items(.range),
         {},
         Transition.Range.searchLessThan,
@@ -198,20 +198,20 @@ pub fn addEpsTransition(self: *Self, state: u32, dest_index: u32) !void {
 
 pub const Transition = struct {
     pub const Range = struct {
-        bot: u8 = 0,
-        top: u8 = 0,
+        start: u8 = 0,
+        end: u8 = 0,
 
         pub fn lessThan(ctx: void, lhs: Range, rhs: Range) bool {
             _ = ctx;
-            if (lhs.bot != rhs.bot) {
-                return lhs.bot < rhs.bot;
+            if (lhs.start != rhs.start) {
+                return lhs.start < rhs.start;
             }
-            return lhs.top < rhs.top;
+            return lhs.end < rhs.end;
         }
 
         pub fn searchLessThan(ctx: void, lhs: Range, rhs: Range) bool {
             _ = ctx;
-            return lhs.top < rhs.bot;
+            return lhs.end < rhs.start;
         }
     };
 
@@ -221,18 +221,18 @@ pub const Transition = struct {
     pub fn fromChar(c: u8, dest_index: u32) Transition {
         return .{
             .range = .{
-                .bot = c,
-                .top = c,
+                .start = c,
+                .end = c,
             },
             .dest_index = dest_index,
         };
     }
 
-    pub fn fromRange(bot: u8, top: u8, dest_index: u32) Transition {
+    pub fn fromRange(start: u8, end: u8, dest_index: u32) Transition {
         return .{
             .range = .{
-                .bot = bot,
-                .top = top,
+                .start = start,
+                .end = end,
             },
             .dest_index = dest_index,
         };

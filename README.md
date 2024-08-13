@@ -13,4 +13,4 @@ For more details see `zg --help`
 - Repetition (`*` and `+`)
 - Optionals (`?`)
 - Anchors (`^` and `$`)
-- Character groups (`[fobar]`, `[a-zA-Z_]` and similar)
+- Character groups (`[a-zA-Z_]`, `[^0-9a-zA-Z]`)
