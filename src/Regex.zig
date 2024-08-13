@@ -360,34 +360,31 @@ fn parseBracketExpr(self: *Self, gpa: std.mem.Allocator, errors: *Errors(SourceS
 
                 if (cur_range_bot == null and next_char.eq(RegexCharacter{ .Literal = '-' })) {
                     cur_range_bot = literal_char;
-                    continue;
-                }
-
-                if (literal_char == '-' and cur_range_bot != null) {
+                } else if (literal_char == '-' and cur_range_bot != null) {
                     const c = cur_range_bot.?;
 
                     if (!next_char.is(.Literal)) {
                         try sortedInsert(gpa, &char_set, c);
                         try sortedInsert(gpa, &char_set, '-');
-                    } else {
-                        const l = next_char.Literal;
-                        if (l < c) {
-                            try errors.addError(
-                                "Range top `{c}` is less than bottom `{c}`",
-                                .{ l, c },
-                                .{ .start = self.lexer.cur_index - 2, .end = self.lexer.cur_index },
-                            );
-                        } else {
-                            _ = self.lexer.getChar() catch unreachable;
-                            try nfa.addTransition(cur_state, NFA.Transition.fromRange(c, l, new_state));
-                            added_ranges += 1;
-                        }
-                        cur_range_bot = null;
+                        continue;
                     }
-                    continue;
-                }
 
-                try sortedInsert(gpa, &char_set, literal_char);
+                    const l = next_char.Literal;
+                    if (l < c) {
+                        try errors.addError(
+                            "Range top `{c}` is less than bottom `{c}`",
+                            .{ l, c },
+                            .{ .start = self.lexer.cur_index - 2, .end = self.lexer.cur_index },
+                        );
+                    } else {
+                        _ = self.lexer.getChar() catch unreachable;
+                        try nfa.addTransition(cur_state, NFA.Transition.fromRange(c, l, new_state));
+                        added_ranges += 1;
+                    }
+                    cur_range_bot = null;
+                } else {
+                    try sortedInsert(gpa, &char_set, literal_char);
+                }
             },
             .Erroneous => {},
             else => unreachable,
