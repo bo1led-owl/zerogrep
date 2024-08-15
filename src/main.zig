@@ -103,62 +103,151 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitC
     var nfa_stack = NFA.Stack.init(gpa);
     defer nfa_stack.deinit();
 
-    const read_buffer = try gpa.alloc(u8, 1 * KiB);
-    defer gpa.free(read_buffer);
+    var read_buffer = try std.ArrayList(u8).initCapacity(gpa, 4 * KiB);
+    defer read_buffer.deinit();
 
+    var code = ExitCode.Success;
     if (!args.from_stdin) {
         const cwd = std.fs.cwd();
 
-        const multiple_files = args.filenames.len > 0;
-        for (0.., args.filenames) |i, filename| {
-            const file = cwd.openFile(filename, .{}) catch |e| {
-                try stderr.print("Error opening `{s}`: {s}\n", .{ filename, @errorName(e) });
-                continue;
-            };
-            defer file.close();
+        if (args.recursive) {
+            try checkRecursively(gpa, args, cwd, stdout, stderr, &read_buffer, nfa, &nfa_stack);
+        } else {
+            const multiple_files = args.paths.len > 0;
+            var first_file = true;
+            for (args.paths) |path| {
+                const file = cwd.openFile(path, .{}) catch |e| {
+                    try stderr.print("Error opening `{s}`: {s}\n", .{ path, @errorName(e) });
+                    code = ExitCode.GenericError;
+                    continue;
+                };
+                defer file.close();
 
-            var buffered_reader = std.io.bufferedReader(file.reader());
-            var reader = buffered_reader.reader();
-
-            const last_file = i == args.filenames.len - 1;
-            const flags = HandleFileFlags{
-                .data_only = args.data_only,
-                .multiple_files = multiple_files,
-                .last_file = last_file,
-            };
-            try handleFile(filename, &reader, read_buffer, stdout, nfa, &nfa_stack, flags);
+                const flags = HandleFileFlags{
+                    .data_only = args.data_only,
+                    .multiple_files = multiple_files,
+                    .first_file = first_file,
+                };
+                if (try handleFile(file, path, &read_buffer, stdout, nfa, &nfa_stack, flags)) {
+                    first_file = true;
+                }
+            }
         }
     } else {
         const stdin_file = std.io.getStdIn();
 
-        var buffered_reader = std.io.bufferedReader(stdin_file.reader());
-        var reader = buffered_reader.reader();
-
         const flags = HandleFileFlags{
             .data_only = args.data_only,
             .multiple_files = false,
-            .last_file = true,
+            .first_file = true,
         };
-        try handleFile("stdin", &reader, read_buffer, stdout, nfa, &nfa_stack, flags);
+        _ = try handleFile(stdin_file, "stdin", &read_buffer, stdout, nfa, &nfa_stack, flags);
     }
     try bw_stdout.flush();
-    return ExitCode.Success;
+    return code;
+}
+
+pub fn checkRecursively(gpa: std.mem.Allocator, args: cli.Args, cwd: std.fs.Dir, stdout: anytype, stderr: anytype, read_buffer: *std.ArrayList(u8), nfa: NFA, nfa_stack: *NFA.Stack) !void {
+    var first_file = true;
+    for (args.paths) |path| {
+        const filestat = cwd.statFile(path) catch |e| {
+            try stderr.print("Error trying to stat `{s}`: {s}\n", .{ path, @errorName(e) });
+            continue;
+        };
+
+        switch (filestat.kind) {
+            .file => {
+                const file = cwd.openFile(path, .{}) catch |e| {
+                    try stderr.print("Error opening `{s}`: {s}\n", .{ path, @errorName(e) });
+                    continue;
+                };
+                defer file.close();
+
+                const flags = HandleFileFlags{
+                    .data_only = args.data_only,
+                    .multiple_files = true,
+                    .first_file = first_file,
+                };
+                if (try handleFile(file, path, read_buffer, stdout, nfa, nfa_stack, flags)) {
+                    first_file = false;
+                }
+            },
+            .directory => {
+                var dir = cwd.openDir(path, .{
+                    .iterate = true,
+                }) catch |e| {
+                    try stderr.print("Error opening `{s}`: {s}\n", .{ path, @errorName(e) });
+                    continue;
+                };
+                defer if (cwd.fd != dir.fd) {
+                    dir.close();
+                };
+
+                var iter = try dir.walk(gpa);
+                defer iter.deinit();
+                while (try iter.next()) |entry| {
+                    switch (entry.kind) {
+                        .file => {
+                            const file = entry.dir.openFile(entry.basename, .{}) catch |e| {
+                                try stderr.print("Error opening `{s}`: {s}\n", .{ entry.path, @errorName(e) });
+                                continue;
+                            };
+                            defer file.close();
+
+                            const flags = HandleFileFlags{
+                                .data_only = args.data_only,
+                                .multiple_files = true,
+                                .first_file = first_file,
+                            };
+
+                            if (try handleFile(file, entry.path, read_buffer, stdout, nfa, nfa_stack, flags)) {
+                                first_file = false;
+                            }
+                        },
+                        else => {},
+                    }
+                }
+            },
+            else => {},
+        }
+    }
 }
 
 const HandleFileFlags = struct {
     data_only: bool,
     multiple_files: bool,
-    last_file: bool,
+    first_file: bool,
 };
 
-fn handleFile(filename: []const u8, reader: anytype, buffer: []u8, stdout: anytype, nfa: NFA, nfa_stack: *NFA.Stack, flags: HandleFileFlags) !void {
+fn handleFile(file: std.fs.File, filename: []const u8, buffer: *std.ArrayList(u8), stdout: anytype, nfa: NFA, nfa_stack: *NFA.Stack, flags: HandleFileFlags) !bool {
+    if (try isFileBinary(file)) {
+        return false;
+    }
+
+    var buffered_reader = std.io.bufferedReader(file.reader());
+    var reader = buffered_reader.reader();
+
+    const ReaderT = @TypeOf(reader);
+
     var line_number: u32 = 1;
     var printed_filename = false;
     var printed = false;
+    var running = true;
 
-    while (try reader.readUntilDelimiterOrEof(buffer, '\n')) |line| : (line_number += 1) {
+    while (running) : (line_number += 1) {
+        reader.streamUntilDelimiter(buffer.writer(), '\n', 128 * MiB) catch |e| switch (e) {
+            ReaderT.NoEofError.EndOfStream => running = false,
+            else => return e,
+        };
+        defer buffer.clearRetainingCapacity();
+
+        const line = buffer.items;
         if (!try nfa.match(nfa_stack, line)) {
             continue;
+        }
+
+        if (!printed_filename and !flags.data_only and flags.multiple_files and !flags.first_file) {
+            try stdout.writeByte('\n');
         }
 
         if (!flags.data_only) {
@@ -179,9 +268,28 @@ fn handleFile(filename: []const u8, reader: anytype, buffer: []u8, stdout: anyty
         printed = true;
     }
 
-    if (printed and !flags.data_only and flags.multiple_files and !flags.last_file) {
-        try stdout.writeByte('\n');
+    return printed;
+}
+
+fn isFileBinary(file: std.fs.File) !bool {
+    const STARTING_CHUNK_SIZE = 1 * KiB;
+    var starting_chunk: [STARTING_CHUNK_SIZE]u8 = undefined;
+    const bytes_read = try file.readAll(&starting_chunk);
+
+    var printable: usize = 0;
+    var zeros: usize = 0;
+    for (starting_chunk[0..bytes_read]) |c| {
+        printable += @as(usize, @intFromBool(std.ascii.isPrint(c)));
+        zeros += @as(usize, @intFromBool(c == 0));
     }
+
+    const printable_percentage = @as(f32, @floatFromInt(printable)) / @as(f32, @floatFromInt(STARTING_CHUNK_SIZE)) * 100.0;
+    const zeros_percentage = @as(f32, @floatFromInt(zeros)) / @as(f32, @floatFromInt(STARTING_CHUNK_SIZE)) * 100.0;
+    if (printable_percentage < 70.0 or zeros_percentage > 5.0) {
+        return true;
+    }
+
+    return false;
 }
 
 test {

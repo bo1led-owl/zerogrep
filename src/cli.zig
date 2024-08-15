@@ -36,7 +36,8 @@ pub fn printHelp(writer: anytype) !void {
         \\
         \\Options:
         \\  -h, --help: print this message
-        \\  -D, --data-only: print only matching lines, not filenames or line numbers
+        \\  -d, --data-only: print only matching lines, not filenames or line numbers
+        \\  -r, --recursive: search recursively in all subdirectories
     );
 }
 
@@ -47,7 +48,8 @@ pub const Args = struct {
     print_help: bool = false,
     pattern: []const u8 = "",
     from_stdin: bool = false,
-    filenames: []const []const u8 = &[_][]u8{},
+    recursive: bool = false,
+    paths: []const []const u8 = &[_][]u8{},
 
     pub const Result = struct {
         args: Args,
@@ -70,10 +72,12 @@ pub const Args = struct {
         _ = iter.skip(); // skip executable name
         const pattern = while (iter.next()) |arg| {
             if (std.mem.startsWith(u8, arg, "-")) {
-                if (std.mem.eql(u8, "-D", arg) or std.mem.eql(u8, "--data-only", arg)) {
+                if (std.mem.eql(u8, "-d", arg) or std.mem.eql(u8, "--data-only", arg)) {
                     result.args.data_only = true;
                 } else if (std.mem.eql(u8, "-h", arg) or std.mem.eql(u8, "--help", arg)) {
                     result.args.print_help = true;
+                } else if (std.mem.eql(u8, "-r", arg) or std.mem.eql(u8, "--recursive", arg)) {
+                    result.args.recursive = true;
                 } else {
                     try result.errors.addError("Unknown option: `{s}`, use `--help` to see the guide", .{arg}, {});
                 }
@@ -82,12 +86,12 @@ pub const Args = struct {
             }
         } else null;
 
-        var filenames = std.ArrayListUnmanaged([]const u8){};
+        var paths = std.ArrayListUnmanaged([]const u8){};
         while (iter.next()) |filename| {
-            try filenames.append(gpa, filename);
+            try paths.append(gpa, filename);
         }
 
-        result.args.filenames = try filenames.toOwnedSlice(gpa);
+        result.args.paths = try paths.toOwnedSlice(gpa);
 
         if (pattern) |pat| {
             result.args.pattern = pat;
@@ -95,8 +99,8 @@ pub const Args = struct {
             try result.errors.addError("No search pattern provided", .{}, {});
         }
 
-        if (result.args.filenames.len == 0) {
-            if (!std.posix.isatty(std.io.getStdIn().handle)) {
+        if (result.args.paths.len == 0) {
+            if (!std.io.getStdIn().isTty()) {
                 result.args.from_stdin = true;
                 result.args.data_only = true;
             } else {
@@ -108,6 +112,6 @@ pub const Args = struct {
     }
 
     pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-        allocator.free(self.filenames);
+        allocator.free(self.paths);
     }
 };
