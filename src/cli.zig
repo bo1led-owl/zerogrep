@@ -36,6 +36,7 @@ pub fn printHelp(writer: anytype) !void {
         \\
         \\Options:
         \\  -h, --help: print this message
+        \\  -p, --pretty: print colored output with filenames and line numbers
         \\  -d, --data-only: print only matching lines, not filenames or line numbers
         \\  -r, --recursive: search recursively in all subdirectories
     );
@@ -45,9 +46,9 @@ pub const Args = struct {
     const Self = @This();
 
     data_only: bool = false,
+    pretty: bool = true,
     print_help: bool = false,
     pattern: []const u8 = "",
-    from_stdin: bool = false,
     recursive: bool = false,
     paths: []const []const u8 = &[_][]u8{},
 
@@ -63,9 +64,14 @@ pub const Args = struct {
         }
     };
 
-    pub fn parse(gpa: std.mem.Allocator, arena: std.mem.Allocator) !Result {
+    pub fn parse(gpa: std.mem.Allocator, arena: std.mem.Allocator, stdin_is_tty: bool, stdout_is_tty: bool) !Result {
         var result = Result.init(gpa, arena);
 
+        if (stdin_is_tty or stdout_is_tty) {
+            result.args.data_only = true;
+            result.args.pretty = false;
+        }
+        
         var iter = try std.process.argsWithAllocator(gpa);
         defer iter.deinit();
 
@@ -74,6 +80,10 @@ pub const Args = struct {
             if (std.mem.startsWith(u8, arg, "-")) {
                 if (std.mem.eql(u8, "-d", arg) or std.mem.eql(u8, "--data-only", arg)) {
                     result.args.data_only = true;
+                    result.args.pretty = false;
+                } else if (std.mem.eql(u8, "-p", arg) or std.mem.eql(u8, "--pretty", arg)) {
+                    result.args.pretty = true;
+                    result.args.data_only = false;
                 } else if (std.mem.eql(u8, "-h", arg) or std.mem.eql(u8, "--help", arg)) {
                     result.args.print_help = true;
                 } else if (std.mem.eql(u8, "-r", arg) or std.mem.eql(u8, "--recursive", arg)) {
@@ -97,15 +107,6 @@ pub const Args = struct {
             result.args.pattern = pat;
         } else {
             try result.errors.addError("No search pattern provided", .{}, {});
-        }
-
-        if (result.args.paths.len == 0) {
-            if (!std.io.getStdIn().isTty()) {
-                result.args.from_stdin = true;
-                result.args.data_only = true;
-            } else {
-                try result.errors.addError("No input provided", .{}, {});
-            }
         }
 
         return result;

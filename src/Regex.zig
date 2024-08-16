@@ -71,6 +71,10 @@ const Lexer = struct {
         var copy = self;
         return copy.getChar();
     }
+
+    pub fn reset(self: *Lexer) void {
+        self.cur_index = 0;
+    }
 };
 
 const RegexCharacter = union(enum) {
@@ -145,6 +149,28 @@ fn handleCharError(errors: *Errors(SourceSpan), err: CharError, char_index: u32)
             return RegexCharacter.Erroneous;
         },
     }
+}
+
+pub fn toStringLiteral(self: *Self, gpa: std.mem.Allocator) !?[]const u8 {
+    var len: u32 = 0;
+    while (true) {
+        switch (self.lexer.getChar() catch RegexCharacter.Erroneous) {
+            .EOF => break,
+            .Literal => len += 1,
+            else => return null,
+        }
+    }
+
+    self.lexer.reset();
+    var result = try gpa.alloc(u8, len);
+    for (0..len) |i| {
+        switch (self.lexer.getChar() catch .Erroneous) {
+            .Literal => |c| result[i] = c,
+            else => unreachable,
+        }
+    }
+    self.lexer.reset();
+    return result;
 }
 
 pub const AutomataBuildResult = struct {

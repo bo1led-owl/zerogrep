@@ -40,15 +40,19 @@ pub fn main() !void {
 }
 
 fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitCode {
-    const stdout_file = std.io.getStdOut().writer();
-    var bw_stdout = std.io.bufferedWriter(stdout_file);
+    const stdout_file = std.io.getStdOut();
+    var bw_stdout = std.io.bufferedWriter(stdout_file.writer());
     const stdout = bw_stdout.writer();
 
     var args: cli.Args = undefined;
     defer args.deinit(gpa);
 
+    var from_stdin = false;
+
     {
-        var cli_result = try cli.Args.parse(gpa, arena);
+        const stdin_is_tty = std.io.getStdIn().isTty();
+        const stdout_is_tty = stdout_file.isTty();
+        var cli_result = try cli.Args.parse(gpa, arena, stdin_is_tty, stdout_is_tty);
         defer cli_result.errors.deinit();
 
         args = cli_result.args;
@@ -57,6 +61,14 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitC
             try cli.printHelp(stdout);
             try bw_stdout.flush();
             return ExitCode.Success;
+        }
+
+        if (args.paths.len == 0) {
+            if (!stdin_is_tty) {
+                from_stdin = true;
+            } else {
+                try cli_result.errors.addError("No input provided", .{}, {});
+            }
         }
 
         if (cli_result.errors.count() != 0) {
@@ -69,51 +81,55 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitC
 
     // var timer = try std.time.Timer.start();
 
-    var nfa: NFA = undefined;
-    defer nfa.deinit();
-
+    var strategy: SearchStrategy = undefined;
+    defer strategy.deinit(gpa);
     {
         var regex = Regex.init(args.pattern);
-        var nfa_build_result = try regex.buildNFA(gpa, arena);
-        defer nfa_build_result.errors.deinit();
+        const string_literal = try regex.toStringLiteral(gpa);
+        if (string_literal) |l| {
+            strategy = SearchStrategy.initStringLiteral(l);
+        } else {
+            var nfa_build_result = try regex.buildNFA(gpa, arena);
+            defer nfa_build_result.errors.deinit();
 
-        // const nfa_build_time: f64 = @floatFromInt(timer.read());
-        // std.debug.print("NFA is built in {d:.3}us\n", .{
-        //     nfa_build_time / std.time.ns_per_us,
-        // });
+            // const nfa_build_time: f64 = @floatFromInt(timer.read());
+            // std.debug.print("NFA is built in {d:.3}us\n", .{
+            //     nfa_build_time / std.time.ns_per_us,
+            // });
 
-        nfa = nfa_build_result.automata;
-        if (nfa_build_result.errors.count() != 0) {
-            for (nfa_build_result.errors.items()) |err| {
-                try stderr.print("{s}\n", .{args.pattern});
+            strategy = SearchStrategy.initRegex(gpa, nfa_build_result.automata);
+            if (nfa_build_result.errors.count() != 0) {
+                for (nfa_build_result.errors.items()) |err| {
+                    try stderr.print("{s}\n", .{args.pattern});
 
-                const span = err.payload;
+                    const span = err.payload;
 
-                try stderr.writeByteNTimes(' ', span.start);
-                try stderr.writeAll(cli.ANSI.Fg.Red ++ cli.ANSI.Bold);
-                try stderr.writeByteNTimes('^', span.end - span.start + 1);
-                try stderr.print(" {s}{s}\n", .{ err.message, cli.ANSI.Reset });
+                    try stderr.writeByteNTimes(' ', span.start);
+                    try stderr.writeAll(cli.ANSI.Fg.Red ++ cli.ANSI.Bold);
+                    try stderr.writeByteNTimes('^', span.end - span.start + 1);
+                    try stderr.print(" {s}{s}\n", .{ err.message, cli.ANSI.Reset });
+                }
+                return ExitCode.IncorrectUsage;
             }
-            return ExitCode.IncorrectUsage;
         }
     }
 
     // nfa.debugPrint();
 
-    var nfa_stack = NFA.Stack.init(gpa);
-    defer nfa_stack.deinit();
+    // var read_buffer = try std.ArrayList(u8).initCapacity(gpa, 96 * KiB);
+    // defer read_buffer.deinit();
 
-    var read_buffer = try std.ArrayList(u8).initCapacity(gpa, 4 * KiB);
-    defer read_buffer.deinit();
+    const read_buffer = try gpa.alloc(u8, 96 * KiB);
+    defer gpa.free(read_buffer);
 
     var code = ExitCode.Success;
-    if (!args.from_stdin) {
+    if (!from_stdin) {
         const cwd = std.fs.cwd();
 
         if (args.recursive) {
-            try checkRecursively(gpa, args, cwd, stdout, stderr, &read_buffer, nfa, &nfa_stack);
+            try checkRecursively(gpa, args, cwd, stdout, stderr, read_buffer, &strategy);
         } else {
-            const multiple_files = args.paths.len > 0;
+            const multiple_files = args.paths.len > 1;
             var first_file = true;
             for (args.paths) |path| {
                 const file = cwd.openFile(path, .{}) catch |e| {
@@ -128,7 +144,7 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitC
                     .multiple_files = multiple_files,
                     .first_file = first_file,
                 };
-                if (try handleFile(file, path, &read_buffer, stdout, nfa, &nfa_stack, flags)) {
+                if (try handleFile(file, path, read_buffer, stdout, &strategy, flags)) {
                     first_file = true;
                 }
             }
@@ -141,13 +157,59 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitC
             .multiple_files = false,
             .first_file = true,
         };
-        _ = try handleFile(stdin_file, "stdin", &read_buffer, stdout, nfa, &nfa_stack, flags);
+        _ = try handleFile(stdin_file, "stdin", read_buffer, stdout, &strategy, flags);
     }
     try bw_stdout.flush();
     return code;
 }
 
-pub fn checkRecursively(gpa: std.mem.Allocator, args: cli.Args, cwd: std.fs.Dir, stdout: anytype, stderr: anytype, read_buffer: *std.ArrayList(u8), nfa: NFA, nfa_stack: *NFA.Stack) !void {
+const SearchStrategy = union(enum) {
+    StringLiteral: []const u8,
+    Regex: struct {
+        nfa: NFA,
+        nfa_stack: NFA.Stack,
+    },
+
+    pub fn initStringLiteral(lit: []const u8) SearchStrategy {
+        return SearchStrategy{
+            .StringLiteral = lit,
+        };
+    }
+
+    pub fn initRegex(gpa: std.mem.Allocator, nfa: NFA) SearchStrategy {
+        return SearchStrategy{
+            .Regex = .{
+                .nfa = nfa,
+                .nfa_stack = NFA.Stack.init(gpa),
+            },
+        };
+    }
+
+    pub fn deinit(self: *SearchStrategy, gpa: std.mem.Allocator) void {
+        switch (self.*) {
+            .StringLiteral => |l| {
+                gpa.free(l);
+            },
+            .Regex => |*r| {
+                r.*.nfa.deinit();
+                r.*.nfa_stack.deinit();
+            },
+        }
+    }
+
+    pub fn match(self: *SearchStrategy, line: []const u8) !bool {
+        switch (self.*) {
+            .StringLiteral => |l| {
+                return std.mem.indexOf(u8, line, l) != null;
+            },
+            .Regex => |*r| {
+                return r.*.nfa.match(&r.*.nfa_stack, line);
+            },
+        }
+    }
+};
+
+pub fn checkRecursively(gpa: std.mem.Allocator, args: cli.Args, cwd: std.fs.Dir, stdout: anytype, stderr: anytype, read_buffer: []u8, strategy: *SearchStrategy) !void {
     var first_file = true;
     for (args.paths) |path| {
         const filestat = cwd.statFile(path) catch |e| {
@@ -168,7 +230,7 @@ pub fn checkRecursively(gpa: std.mem.Allocator, args: cli.Args, cwd: std.fs.Dir,
                     .multiple_files = true,
                     .first_file = first_file,
                 };
-                if (try handleFile(file, path, read_buffer, stdout, nfa, nfa_stack, flags)) {
+                if (try handleFile(file, path, read_buffer, stdout, strategy, flags)) {
                     first_file = false;
                 }
             },
@@ -200,7 +262,7 @@ pub fn checkRecursively(gpa: std.mem.Allocator, args: cli.Args, cwd: std.fs.Dir,
                                 .first_file = first_file,
                             };
 
-                            if (try handleFile(file, entry.path, read_buffer, stdout, nfa, nfa_stack, flags)) {
+                            if (try handleFile(file, entry.path, read_buffer, stdout, strategy, flags)) {
                                 first_file = false;
                             }
                         },
@@ -219,73 +281,114 @@ const HandleFileFlags = struct {
     first_file: bool,
 };
 
-fn handleFile(file: std.fs.File, filename: []const u8, buffer: *std.ArrayList(u8), stdout: anytype, nfa: NFA, nfa_stack: *NFA.Stack, flags: HandleFileFlags) !bool {
-    if (try isFileBinary(file)) {
+fn LineReader(comptime ReaderType: type) type {
+    return struct {
+        const Self = @This();
+
+        unbuffered_reader: ReaderType,
+        buffer: []u8,
+        start: usize,
+        end: usize,
+
+        pub fn preread(self: *Self) !void {
+            std.debug.assert(self.start == 0);
+            std.debug.assert(self.end == 0);
+            self.end = try self.unbuffered_reader.readAll(self.buffer);
+        }
+
+        pub fn cur(self: Self) []const u8 {
+            return self.buffer[self.start..self.end];
+        }
+
+        pub fn next(self: *Self) !?[]const u8 {
+            var newline_index = std.mem.indexOfScalarPos(u8, self.buffer[0..self.end], self.start, '\n');
+            if (newline_index == null) {
+                const tail_len = self.end - self.start;
+                @memcpy(self.buffer[0..tail_len], self.buffer[self.start..self.end]);
+                self.end = try self.unbuffered_reader.readAll(self.buffer);
+                self.start = 0;
+                newline_index = std.mem.indexOfScalar(u8, self.buffer[0..self.end], '\n');
+            }
+
+            if (self.start == self.end and newline_index == null) {
+                return null;
+            }
+
+            defer self.start = newline_index.? + 1;
+            return self.buffer[self.start..newline_index.?];
+        }
+    };
+}
+
+fn lineReader(buffer: []u8, reader: anytype) LineReader(@TypeOf(reader)) {
+    return LineReader(@TypeOf(reader)){
+        .unbuffered_reader = reader,
+        .buffer = buffer,
+        .start = 0,
+        .end = 0,
+    };
+}
+
+fn handleFile(file: std.fs.File, filename: []const u8, buffer: []u8, stdout: anytype, strategy: *SearchStrategy, flags: HandleFileFlags) !bool {
+    var line_reader = lineReader(buffer, file.reader());
+    try line_reader.preread();
+
+    // std.debug.print("{s}\n", .{filename});
+    if (try isFileBinary(line_reader.cur())) {
         return false;
     }
 
-    var buffered_reader = std.io.bufferedReader(file.reader());
-    var reader = buffered_reader.reader();
-
-    const ReaderT = @TypeOf(reader);
-
     var line_number: u32 = 1;
-    var printed_filename = false;
     var printed = false;
-    var running = true;
 
-    while (running) : (line_number += 1) {
-        reader.streamUntilDelimiter(buffer.writer(), '\n', 128 * MiB) catch |e| switch (e) {
-            ReaderT.NoEofError.EndOfStream => running = false,
-            else => return e,
-        };
-        defer buffer.clearRetainingCapacity();
-
-        const line = buffer.items;
-        if (!try nfa.match(nfa_stack, line)) {
-            continue;
+    while (try line_reader.next()) |line| : (line_number += 1) {
+        if (try handleLine(stdout, filename, line_number, strategy, line, printed, flags)) {
+            printed = true;
         }
-
-        if (!printed_filename and !flags.data_only and flags.multiple_files and !flags.first_file) {
-            try stdout.writeByte('\n');
-        }
-
-        if (!flags.data_only) {
-            const should_print_filename = flags.multiple_files and !printed_filename;
-            const should_print_line_number = flags.multiple_files;
-
-            if (should_print_filename) {
-                try stdout.print("{s}{s}{s}\n", .{ cli.ANSI.Fg.Magenta, filename, cli.ANSI.Reset });
-                printed_filename = true;
-            }
-
-            if (should_print_line_number) {
-                try stdout.print("{s}{d}:{s} ", .{ cli.ANSI.Fg.Green, line_number, cli.ANSI.Reset });
-            }
-        }
-
-        try stdout.print("{s}\n", .{line});
-        printed = true;
     }
 
     return printed;
 }
 
-fn isFileBinary(file: std.fs.File) !bool {
-    const STARTING_CHUNK_SIZE = 1 * KiB;
-    var starting_chunk: [STARTING_CHUNK_SIZE]u8 = undefined;
-    const bytes_read = try file.readAll(&starting_chunk);
+fn handleLine(stdout: anytype, filename: []const u8, line_number: u32, strategy: *SearchStrategy, line: []const u8, printed: bool, flags: HandleFileFlags) !bool {
+    if (!try strategy.match(line)) {
+        return false;
+    }
 
+    if (!printed and !flags.data_only and flags.multiple_files and !flags.first_file) {
+        try stdout.writeByte('\n');
+    }
+
+    if (!flags.data_only) {
+        const should_print_filename = !flags.data_only and flags.multiple_files and !printed;
+        const should_print_line_number = !flags.data_only;
+
+        if (should_print_filename) {
+            try stdout.print("{s}{s}{s}\n", .{ cli.ANSI.Fg.Magenta, filename, cli.ANSI.Reset });
+        }
+
+        if (should_print_line_number) {
+            try stdout.print("{s}{d}:{s} ", .{ cli.ANSI.Fg.Green, line_number, cli.ANSI.Reset });
+        }
+    }
+
+    try stdout.print("{s}\n", .{line});
+    return true;
+}
+
+fn isFileBinary(buf: []const u8) !bool {
     var printable: usize = 0;
     var zeros: usize = 0;
-    for (starting_chunk[0..bytes_read]) |c| {
+    for (buf) |c| {
         printable += @as(usize, @intFromBool(std.ascii.isPrint(c)));
         zeros += @as(usize, @intFromBool(c == 0));
     }
 
-    const printable_percentage = @as(f32, @floatFromInt(printable)) / @as(f32, @floatFromInt(STARTING_CHUNK_SIZE)) * 100.0;
-    const zeros_percentage = @as(f32, @floatFromInt(zeros)) / @as(f32, @floatFromInt(STARTING_CHUNK_SIZE)) * 100.0;
-    if (printable_percentage < 70.0 or zeros_percentage > 5.0) {
+    const printable_percentage = @as(f64, @floatFromInt(printable)) / @as(f64, @floatFromInt(buf.len)) * 100.0;
+    const zeros_percentage = @as(f64, @floatFromInt(zeros)) / @as(f64, @floatFromInt(buf.len)) * 100.0;
+
+    // std.debug.print("{d} {d}\n", .{printable_percentage, zeros_percentage});
+    if (printable_percentage < 20.0 or zeros_percentage > 2.0) {
         return true;
     }
 
