@@ -379,13 +379,15 @@ fn handleLine(stdout: anytype, filename: []const u8, line_number: u32, strategy:
 fn isFileBinary(buf: []const u8) !bool {
     var printable: usize = 0;
     var zeros: usize = 0;
-    for (buf) |c| {
+
+    const control_chunk = buf[0..@min(buf.len, 1 * KiB)];
+    for (control_chunk) |c| {
         printable += @as(usize, @intFromBool(std.ascii.isPrint(c)));
         zeros += @as(usize, @intFromBool(c == 0));
     }
 
-    const printable_percentage = @as(f64, @floatFromInt(printable)) / @as(f64, @floatFromInt(buf.len)) * 100.0;
-    const zeros_percentage = @as(f64, @floatFromInt(zeros)) / @as(f64, @floatFromInt(buf.len)) * 100.0;
+    const printable_percentage = @as(f64, @floatFromInt(printable)) / @as(f64, @floatFromInt(control_chunk.len)) * 100.0;
+    const zeros_percentage = @as(f64, @floatFromInt(zeros)) / @as(f64, @floatFromInt(control_chunk.len)) * 100.0;
 
     // std.debug.print("{d} {d}\n", .{printable_percentage, zeros_percentage});
     if (printable_percentage < 20.0 or zeros_percentage > 2.0) {

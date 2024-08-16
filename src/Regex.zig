@@ -152,6 +152,8 @@ fn handleCharError(errors: *Errors(SourceSpan), err: CharError, char_index: u32)
 }
 
 pub fn toStringLiteral(self: *Self, gpa: std.mem.Allocator) !?[]const u8 {
+    defer self.lexer.reset();
+
     var len: u32 = 0;
     while (true) {
         switch (self.lexer.getChar() catch RegexCharacter.Erroneous) {
@@ -169,7 +171,6 @@ pub fn toStringLiteral(self: *Self, gpa: std.mem.Allocator) !?[]const u8 {
             else => unreachable,
         }
     }
-    self.lexer.reset();
     return result;
 }
 
@@ -397,26 +398,24 @@ fn parseBracketExpr(self: *Self, gpa: std.mem.Allocator, errors: *Errors(SourceS
                 if (cur_range_start == null and next_char.eq(RegexCharacter{ .Literal = '-' })) {
                     cur_range_start = literal_char;
                 } else if (literal_char == '-' and cur_range_start != null) {
-                    const c = cur_range_start.?;
+                    const start = cur_range_start.?;
 
                     if (!next_char.is(.Literal)) {
-                        // try sortedInsert(gpa, &char_set, c);
-                        // try sortedInsert(gpa, &char_set, '-');
-                        try added_ranges.append(gpa, Range{ .start = c, .end = c });
+                        try added_ranges.append(gpa, Range{ .start = start, .end = start });
                         try added_ranges.append(gpa, Range{ .start = '-', .end = '-' });
                         continue;
                     }
 
-                    const l = next_char.Literal;
-                    if (l < c) {
+                    const end = next_char.Literal;
+                    if (end < start) {
                         try errors.addError(
                             "Range end `{c}` is less than start `{c}`",
-                            .{ l, c },
+                            .{ end, start },
                             .{ .start = self.lexer.cur_index - 2, .end = self.lexer.cur_index },
                         );
                     } else {
                         _ = self.lexer.getChar() catch unreachable;
-                        try added_ranges.append(gpa, Range{ .start = c, .end = l });
+                        try added_ranges.append(gpa, Range{ .start = start, .end = end });
                     }
                     cur_range_start = null;
                 } else {
@@ -790,12 +789,12 @@ test "bracket expressions" {
     {
         var regex = Self.init("[a-z]");
         var nfa_result = try regex.buildNFA(allocator, arena);
-        try std.testing.expect(nfa_result.errors.count() == 0);
-
         defer nfa_result.errors.deinit();
 
         var nfa = nfa_result.automata;
         defer nfa.deinit();
+
+        try std.testing.expect(nfa_result.errors.count() == 0);
 
         for ('a'..'z' + 1) |c| {
             try std.testing.expect(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
@@ -808,14 +807,34 @@ test "bracket expressions" {
         }
     }
     {
-        var regex = Self.init("[a-zA-Z]");
+        var regex = Self.init("[A-Z]+");
         var nfa_result = try regex.buildNFA(allocator, arena);
-        try std.testing.expect(nfa_result.errors.count() == 0);
-
         defer nfa_result.errors.deinit();
 
         var nfa = nfa_result.automata;
         defer nfa.deinit();
+
+        try std.testing.expect(nfa_result.errors.count() == 0);
+
+        for ('A'..'Z' + 1) |c| {
+            try std.testing.expect(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+        }
+        for (std.math.minInt(u8)..'A') |c| {
+            try std.testing.expect(!try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+        }
+        for ('Z' + 1..std.math.maxInt(u8)) |c| {
+            try std.testing.expect(!try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+        }
+    }
+    {
+        var regex = Self.init("[a-zA-Z]");
+        var nfa_result = try regex.buildNFA(allocator, arena);
+        defer nfa_result.errors.deinit();
+
+        var nfa = nfa_result.automata;
+        defer nfa.deinit();
+
+        try std.testing.expect(nfa_result.errors.count() == 0);
 
         for (std.math.minInt(u8)..std.math.maxInt(u8)) |c| {
             if ('a' <= c and c <= 'z' or 'A' <= c and c <= 'Z') {
@@ -828,12 +847,12 @@ test "bracket expressions" {
     {
         var regex = Self.init("[^a-zA-Z]");
         var nfa_result = try regex.buildNFA(allocator, arena);
-        try std.testing.expect(nfa_result.errors.count() == 0);
-
         defer nfa_result.errors.deinit();
 
         var nfa = nfa_result.automata;
         defer nfa.deinit();
+
+        try std.testing.expect(nfa_result.errors.count() == 0);
 
         for (std.math.minInt(u8)..std.math.maxInt(u8)) |c| {
             if ('a' <= c and c <= 'z' or 'A' <= c and c <= 'Z') {
@@ -846,12 +865,12 @@ test "bracket expressions" {
     {
         var regex = Self.init("[badcef]");
         var nfa_result = try regex.buildNFA(allocator, arena);
-        try std.testing.expect(nfa_result.errors.count() == 0);
-
         defer nfa_result.errors.deinit();
 
         var nfa = nfa_result.automata;
         defer nfa.deinit();
+
+        try std.testing.expect(nfa_result.errors.count() == 0);
 
         for ('a'..'f' + 1) |c| {
             try std.testing.expect(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
@@ -866,12 +885,12 @@ test "bracket expressions" {
     {
         var regex = Self.init("[^badcef]");
         var nfa_result = try regex.buildNFA(allocator, arena);
-        try std.testing.expect(nfa_result.errors.count() == 0);
-
         defer nfa_result.errors.deinit();
 
         var nfa = nfa_result.automata;
         defer nfa.deinit();
+
+        try std.testing.expect(nfa_result.errors.count() == 0);
 
         for ('a'..'f' + 1) |c| {
             try std.testing.expect(!try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
@@ -886,12 +905,12 @@ test "bracket expressions" {
     {
         var regex = Self.init("[a-]");
         var nfa_result = try regex.buildNFA(allocator, arena);
-        try std.testing.expect(nfa_result.errors.count() == 0);
-
         defer nfa_result.errors.deinit();
 
         var nfa = nfa_result.automata;
         defer nfa.deinit();
+
+        try std.testing.expect(nfa_result.errors.count() == 0);
 
         for (std.math.minInt(u8)..std.math.maxInt(u8)) |c| {
             if (c == 'a' or c == '-') {
@@ -904,12 +923,12 @@ test "bracket expressions" {
     {
         var regex = Self.init("[-a]");
         var nfa_result = try regex.buildNFA(allocator, arena);
-        try std.testing.expect(nfa_result.errors.count() == 0);
-
         defer nfa_result.errors.deinit();
 
         var nfa = nfa_result.automata;
         defer nfa.deinit();
+
+        try std.testing.expect(nfa_result.errors.count() == 0);
 
         for (std.math.minInt(u8)..std.math.maxInt(u8)) |c| {
             if (c == 'a' or c == '-') {
@@ -922,9 +941,9 @@ test "bracket expressions" {
     {
         var regex = Self.init("[[]");
         var nfa_result = try regex.buildNFA(allocator, arena);
-        try std.testing.expect(nfa_result.errors.count() == 0);
-
         defer nfa_result.errors.deinit();
+
+        try std.testing.expect(nfa_result.errors.count() == 0);
 
         var nfa = nfa_result.automata;
         defer nfa.deinit();
@@ -940,9 +959,9 @@ test "bracket expressions" {
     {
         var regex = Self.init("[]]");
         var nfa_result = try regex.buildNFA(allocator, arena);
-        try std.testing.expect(nfa_result.errors.count() == 0);
-
         defer nfa_result.errors.deinit();
+
+        try std.testing.expect(nfa_result.errors.count() == 0);
 
         var nfa = nfa_result.automata;
         defer nfa.deinit();
