@@ -45,94 +45,94 @@ pub fn debugPrint(nfa: Self) void {
     }
 }
 
-fn getTransitions(self: *const Self, from: u32, key: u8) TransitionIterator {
-    const state = self.states.items[from];
-    const range = std.sort.equalRange(
+fn getFirstTransition(self: Self, from: u32, key: u8) u32 {
+    return @intCast(std.sort.lowerBound(
         Transition.Range,
         Transition.Range{ .start = key, .end = key },
-        state.transitions.items(.range),
+        self.states.items[from].transitions.items(.range),
         {},
         Transition.Range.searchLessThan,
-    );
-
-    return TransitionIterator{
-        .transitions = state.transitions.items(.dest_index)[range[0]..range[1]],
-    };
-}
-
-fn getEpsTransitions(self: *const Self, from: u32) TransitionIterator {
-    const state = self.states.items[from];
-    return TransitionIterator{ .transitions = state.epsilon_transitions.items };
+    ));
 }
 
 pub const Stack = std.ArrayList(StackFrame);
 
 const StackFrame = struct {
     state_index: u32,
-    input_start: u32,
-    iter: TransitionIterator,
-    epsilon_iter: TransitionIterator,
+    char_index: u32,
+    cur_transition: u32,
+    cur_epsilon_transition: u32,
 };
 
-fn walk(self: *const Self, stack: *Stack, input: []const u8, at_line_start: bool) !bool {
+fn walk(self: Self, stack: *Stack, input: []const u8, at_line_start: bool) !bool {
     try stack.append(.{
         .state_index = 0,
-        .input_start = 0,
-        .iter = if (input.len > 0) self.getTransitions(0, input[0]) else .{},
-        .epsilon_iter = self.getEpsTransitions(0),
+        .char_index = 0,
+        .cur_transition = if (input.len > 0) self.getFirstTransition(0, input[0]) else 0,
+        .cur_epsilon_transition = 0,
     });
 
     while (stack.items.len > 0) {
-        const state_index = stack.getLast().state_index;
-        const char_index = stack.getLast().input_start;
-        var iter = &stack.*.items[stack.items.len - 1].iter;
-        var epsilon_iter = &stack.*.items[stack.items.len - 1].epsilon_iter;
+        const frame = stack.getLast();
+        const state = &self.states.items.ptr[frame.state_index];
 
-        if (self.states.items[state_index].at_line_start and (!at_line_start or char_index != 0)) {
+        if (state.*.at_line_start and (!at_line_start or frame.char_index != 0)) {
             _ = stack.popOrNull();
             continue;
         }
 
-        if (self.states.items[state_index].at_line_end and char_index < input.len) {
+        if (state.*.at_line_end and frame.char_index < input.len) {
             _ = stack.popOrNull();
             continue;
         }
 
-        if (self.accepting_state == state_index) {
+        if (self.accepting_state == frame.state_index) {
             return true;
         }
 
-        if (epsilon_iter.next()) |dest| {
+        if (frame.cur_epsilon_transition < state.*.epsilon_transitions.items.len) {
             // std.debug.print("{d} eps -> {d}\n", .{ state_index, dest });
 
-            const new_iter = if (char_index < input.len) self.getTransitions(dest, input[char_index]) else TransitionIterator{};
-            const new_eps_iter = self.getEpsTransitions(dest);
+            const dest = state.*.epsilon_transitions.items[frame.cur_epsilon_transition];
+            stack.items[stack.items.len - 1].cur_epsilon_transition += 1;
 
             try stack.append(.{
                 .state_index = dest,
-                .input_start = char_index,
-                .iter = new_iter,
-                .epsilon_iter = new_eps_iter,
+                .char_index = frame.char_index + 1,
+                .cur_transition = if (frame.char_index + 1 < input.len)
+                    self.getFirstTransition(dest, input[frame.char_index + 1])
+                else
+                    0,
+                .cur_epsilon_transition = 0,
             });
             continue;
         }
 
-        if (char_index >= input.len) {
+        if (frame.char_index >= input.len) {
             _ = stack.popOrNull();
             continue;
         }
 
-        if (iter.next()) |dest| {
+        if (frame.cur_transition >= state.*.transitions.len) {
+            _ = stack.popOrNull();
+            continue;
+        }
+
+        const transition = state.*.transitions.get(frame.cur_transition);
+        const cur_char = input[frame.char_index];
+        if (transition.range.matches(cur_char)) {
             // std.debug.print("{d} -> {d}\n", .{ state_index, dest });
 
-            const new_iter = if (char_index + 1 < input.len) self.getTransitions(dest, input[char_index + 1]) else TransitionIterator{};
-            const new_eps_iter = self.getEpsTransitions(dest);
+            stack.items[stack.items.len - 1].cur_transition += 1;
 
             try stack.append(.{
-                .state_index = dest,
-                .input_start = char_index + 1,
-                .iter = new_iter,
-                .epsilon_iter = new_eps_iter,
+                .state_index = transition.dest_index,
+                .char_index = frame.char_index + 1,
+                .cur_transition = if (frame.char_index + 1 < input.len)
+                    self.getFirstTransition(transition.dest_index, input[frame.char_index + 1])
+                else
+                    0,
+                .cur_epsilon_transition = 0,
             });
         } else {
             _ = stack.popOrNull();
@@ -142,7 +142,7 @@ fn walk(self: *const Self, stack: *Stack, input: []const u8, at_line_start: bool
     return false;
 }
 
-pub fn match(self: *const Self, stack: *Stack, line: []const u8) !bool {
+pub fn match(self: Self, stack: *Stack, line: []const u8) !bool {
     // std.debug.print("accepting: {d}\n", .{self.accepting_state});
     defer stack.clearRetainingCapacity();
 
@@ -213,6 +213,10 @@ pub const Transition = struct {
             _ = ctx;
             return lhs.end < rhs.start;
         }
+
+        pub fn matches(self: Range, c: u8) bool {
+            return self.start <= c and c <= self.end;
+        }
     };
 
     range: Range = .{},
@@ -236,19 +240,6 @@ pub const Transition = struct {
             },
             .dest_index = dest_index,
         };
-    }
-};
-
-pub const TransitionIterator = struct {
-    transitions: []const u32 = &[_]u32{},
-
-    pub fn next(self: *TransitionIterator) ?u32 {
-        if (self.transitions.len == 0) {
-            return null;
-        }
-
-        defer self.transitions = self.transitions[1..];
-        return self.transitions[0];
     }
 };
 
