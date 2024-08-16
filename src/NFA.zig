@@ -77,12 +77,12 @@ fn walk(self: Self, stack: *Stack, input: []const u8, at_line_start: bool) !bool
         const state = &self.states.items.ptr[frame.state_index];
 
         if (state.*.at_line_start and (!at_line_start or frame.char_index != 0)) {
-            _ = stack.popOrNull();
+            _ = stack.pop();
             continue;
         }
 
         if (state.*.at_line_end and frame.char_index < input.len) {
-            _ = stack.popOrNull();
+            _ = stack.pop();
             continue;
         }
 
@@ -109,12 +109,12 @@ fn walk(self: Self, stack: *Stack, input: []const u8, at_line_start: bool) !bool
         }
 
         if (frame.char_index >= input.len) {
-            _ = stack.popOrNull();
+            _ = stack.pop();
             continue;
         }
 
         if (frame.cur_transition >= state.*.transitions.len) {
-            _ = stack.popOrNull();
+            _ = stack.pop();
             continue;
         }
 
@@ -135,7 +135,7 @@ fn walk(self: Self, stack: *Stack, input: []const u8, at_line_start: bool) !bool
                 .cur_epsilon_transition = 0,
             });
         } else {
-            _ = stack.popOrNull();
+            _ = stack.pop();
         }
     }
 
