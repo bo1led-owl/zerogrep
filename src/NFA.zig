@@ -1,21 +1,15 @@
 const std = @import("std");
 const Self = @This();
+const Builder = @import("NfaBuilder.zig");
 
-allocator: std.mem.Allocator,
 states: std.ArrayListUnmanaged(State) = .{},
 accepting_state: u32 = 0,
 
-pub fn init(allocator: std.mem.Allocator) Self {
-    return .{
-        .allocator = allocator,
-    };
-}
-
-pub fn deinit(self: *Self) void {
+pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
     for (self.states.items) |*state| {
-        state.deinit(self.allocator);
+        state.deinit(allocator);
     }
-    self.states.deinit(self.allocator);
+    self.states.deinit(allocator);
 }
 
 pub fn debugPrint(nfa: Self) void {
@@ -91,14 +85,15 @@ fn walk(self: Self, stack: *Stack, input: []const u8, at_line_start: bool) !bool
         }
 
         if (frame.cur_epsilon_transition < state.*.epsilon_transitions.items.len) {
-            // std.debug.print("{d} eps -> {d}\n", .{ state_index, dest });
-
             const dest = state.*.epsilon_transitions.items[frame.cur_epsilon_transition];
+
+            // std.debug.print("{d} eps -> {d}\n", .{ frame.state_index, dest });
+
             stack.items[stack.items.len - 1].cur_epsilon_transition += 1;
 
             try stack.append(.{
                 .state_index = dest,
-                .char_index = frame.char_index + 1,
+                .char_index = frame.char_index,
                 .cur_transition = if (frame.char_index + 1 < input.len)
                     self.getFirstTransition(dest, input[frame.char_index + 1])
                 else
@@ -121,7 +116,7 @@ fn walk(self: Self, stack: *Stack, input: []const u8, at_line_start: bool) !bool
         const transition = state.*.transitions.get(frame.cur_transition);
         const cur_char = input[frame.char_index];
         if (transition.range.matches(cur_char)) {
-            // std.debug.print("{d} -> {d}\n", .{ state_index, dest });
+            // std.debug.print("{d} {c} -> {d}\n", .{ frame.state_index, cur_char, transition.dest_index });
 
             stack.items[stack.items.len - 1].cur_transition += 1;
 
@@ -143,7 +138,6 @@ fn walk(self: Self, stack: *Stack, input: []const u8, at_line_start: bool) !bool
 }
 
 pub fn match(self: Self, stack: *Stack, line: []const u8) !bool {
-    // std.debug.print("accepting: {d}\n", .{self.accepting_state});
     defer stack.clearRetainingCapacity();
 
     // var timer = try std.time.Timer.start();
@@ -156,8 +150,6 @@ pub fn match(self: Self, stack: *Stack, line: []const u8) !bool {
     // }
 
     for (0..line.len) |i| {
-        // std.debug.print("{s}\n", .{line[i..]});
-
         if (try self.walk(stack, line[i..], i == 0)) {
             return true;
         }
@@ -170,32 +162,6 @@ pub fn match(self: Self, stack: *Stack, line: []const u8) !bool {
 }
 
 /// add state and return its index
-pub fn addState(self: *Self, state: State) !u32 {
-    try self.states.append(self.allocator, state);
-    return @intCast(self.states.items.len - 1);
-}
-
-pub fn markAtLineStart(self: *Self, i: u32) void {
-    self.states.items[i].at_line_start = true;
-}
-
-pub fn markAtLineEnd(self: *Self, i: u32) void {
-    self.states.items[i].at_line_end = true;
-}
-
-pub fn setAcceptingState(self: *Self, i: u32) void {
-    std.debug.assert(i < self.states.items.len);
-    self.accepting_state = i;
-}
-
-pub fn addTransition(self: *Self, state: u32, transition: Transition) !void {
-    try self.states.items[state].addTransition(self.allocator, transition);
-}
-
-pub fn addEpsTransition(self: *Self, state: u32, dest_index: u32) !void {
-    try self.states.items[state].addEpsTransition(self.allocator, dest_index);
-}
-
 pub const Transition = struct {
     pub const Range = struct {
         start: u8 = 0,
@@ -217,30 +183,24 @@ pub const Transition = struct {
         pub fn matches(self: Range, c: u8) bool {
             return self.start <= c and c <= self.end;
         }
+
+        pub fn fromChar(c: u8) Range {
+            return .{
+                .start = c,
+                .end = c,
+            };
+        }
+
+        pub fn fromRange(start: u8, end: u8) Range {
+            return .{
+                .start = start,
+                .end = end,
+            };
+        }
     };
 
     range: Range = .{},
     dest_index: u32 = 0,
-
-    pub fn fromChar(c: u8, dest_index: u32) Transition {
-        return .{
-            .range = .{
-                .start = c,
-                .end = c,
-            },
-            .dest_index = dest_index,
-        };
-    }
-
-    pub fn fromRange(start: u8, end: u8, dest_index: u32) Transition {
-        return .{
-            .range = .{
-                .start = start,
-                .end = end,
-            },
-            .dest_index = dest_index,
-        };
-    }
 };
 
 pub const State = struct {
@@ -269,21 +229,6 @@ pub const State = struct {
         self.transitions.deinit(allocator);
         self.epsilon_transitions.deinit(allocator);
     }
-
-    pub fn addTransition(self: *State, allocator: std.mem.Allocator, transition: Transition) !void {
-        const i = std.sort.lowerBound(
-            Transition.Range,
-            transition.range,
-            self.transitions.items(.range),
-            {},
-            Transition.Range.lessThan,
-        );
-        try self.transitions.insert(allocator, i, transition);
-    }
-
-    pub fn addEpsTransition(self: *State, allocator: std.mem.Allocator, dest_index: u32) !void {
-        try self.epsilon_transitions.append(allocator, dest_index);
-    }
 };
 
 test "basic" {
@@ -292,20 +237,23 @@ test "basic" {
     //
 
     const allocator = std.testing.allocator;
-    var nfa = Self.init(allocator);
-    defer nfa.deinit();
+    var builder = Builder.init(allocator);
 
     for (0..3) |_| {
-        _ = try nfa.addState(.{});
+        _ = try builder.addState(.{});
     }
 
-    nfa.setAcceptingState(2);
+    builder.setAcceptingState(2);
 
-    try nfa.addTransition(0, Transition.fromChar('a', 1));
-    try nfa.addTransition(1, Transition.fromChar('b', 2));
+    try builder.addTransition(0, Transition{.range = Transition.Range.fromChar('a'), .dest_index = 1});
+    try builder.addTransition(1, Transition{.range = Transition.Range.fromChar('b'), .dest_index = 2});
+
+    var nfa = builder.build();
+    defer nfa.deinit(allocator);
 
     var stack = Stack.init(allocator);
     defer stack.deinit();
+
     try std.testing.expect(try nfa.match(&stack, "ab"));
     try std.testing.expect(try nfa.match(&stack, "cab"));
     try std.testing.expect(try nfa.match(&stack, "abc"));
@@ -320,20 +268,24 @@ test "epsilon transition" {
     // (0) ---> (1) ----> ((2))
     //
     const allocator = std.testing.allocator;
-    var nfa = Self.init(allocator);
-    defer nfa.deinit();
+    var builder = Builder.init(allocator);
 
     for (0..3) |_| {
-        _ = try nfa.addState(.{});
+        _ = try builder.addState(.{});
     }
 
-    nfa.setAcceptingState(2);
+    builder.setAcceptingState(2);
 
-    try nfa.addTransition(0, Transition.fromChar('a', 1));
-    try nfa.addEpsTransition(1, 2);
+    try builder.addTransition(0, Transition{.range = Transition.Range.fromChar('a'), .dest_index = 1});
+    try builder.addEpsTransition(1, 2);
+
+    var nfa = builder.build();
+    defer nfa.deinit(allocator);
 
     var stack = Stack.init(allocator);
     defer stack.deinit();
+
+
     try std.testing.expect(try nfa.match(&stack, "ab"));
     try std.testing.expect(try nfa.match(&stack, "cab"));
     try std.testing.expect(try nfa.match(&stack, "abc"));
@@ -353,21 +305,23 @@ test "branching" {
     //   -----> (3) --/
 
     const allocator = std.testing.allocator;
-    var nfa = Self.init(allocator);
-    defer nfa.deinit();
+    var builder = Builder.init(allocator);
 
     for (0..5) |_| {
-        _ = try nfa.addState(.{});
+        _ = try builder.addState(.{});
     }
-    nfa.setAcceptingState(4);
+    builder.setAcceptingState(4);
 
-    try nfa.addTransition(0, Transition.fromChar('a', 1));
-    try nfa.addTransition(0, Transition.fromChar('b', 2));
-    try nfa.addTransition(0, Transition.fromChar('c', 3));
+    try builder.addTransition(0, Transition{.range = Transition.Range.fromChar('a'), .dest_index = 1});
+    try builder.addTransition(0, Transition{.range = Transition.Range.fromChar('b'), .dest_index = 2});
+    try builder.addTransition(0, Transition{.range = Transition.Range.fromChar('c'), .dest_index = 3});
 
-    try nfa.addEpsTransition(1, 4);
-    try nfa.addEpsTransition(2, 4);
-    try nfa.addEpsTransition(3, 4);
+    try builder.addEpsTransition(1, 4);
+    try builder.addEpsTransition(2, 4);
+    try builder.addEpsTransition(3, 4);
+
+    var nfa = builder.build();
+    defer nfa.deinit(allocator);
 
     var stack = Stack.init(allocator);
     defer stack.deinit();
@@ -390,17 +344,19 @@ test "loop" {
     //      eps
 
     const allocator = std.testing.allocator;
-    var nfa = Self.init(allocator);
-    defer nfa.deinit();
+    var builder = Builder.init(allocator);
 
     for (0..3) |_| {
-        _ = try nfa.addState(.{});
+        _ = try builder.addState(.{});
     }
-    nfa.setAcceptingState(2);
+    builder.setAcceptingState(2);
 
-    try nfa.addTransition(0, Transition.fromChar('a', 1));
-    try nfa.addEpsTransition(1, 0);
-    try nfa.addEpsTransition(1, 2);
+    try builder.addTransition(0, Transition{.range = Transition.Range.fromChar('a'), .dest_index = 1});
+    try builder.addEpsTransition(1, 0);
+    try builder.addEpsTransition(1, 2);
+
+    var nfa = builder.build();
+    defer nfa.deinit(allocator);
 
     var stack = Stack.init(allocator);
     defer stack.deinit();
