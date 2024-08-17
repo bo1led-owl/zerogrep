@@ -182,8 +182,9 @@ pub const AutomataBuildResult = struct {
 
 pub fn buildNFA(self: *Self, gpa: std.mem.Allocator, arena: std.mem.Allocator) !AutomataBuildResult {
     var errors = Errors(SourceSpan).init(gpa, arena);
-    // var nfa = NFA.init(gpa);
     var builder = NfaBuilder.init(gpa);
+
+    errdefer builder.build().deinit(gpa);
 
     const cur_state = try builder.addState(.{});
     const res = try self.parse(gpa, &errors, &builder, cur_state, RegexCharacter.EOF);
