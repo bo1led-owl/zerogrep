@@ -1,5 +1,6 @@
 const std = @import("std");
 const NFA = @import("NFA.zig");
+const NfaBuilder = @import("NfaBuilder.zig");
 const Errors = @import("errors.zig").Errors;
 
 const Self = @This();
@@ -181,15 +182,16 @@ pub const AutomataBuildResult = struct {
 
 pub fn buildNFA(self: *Self, gpa: std.mem.Allocator, arena: std.mem.Allocator) !AutomataBuildResult {
     var errors = Errors(SourceSpan).init(gpa, arena);
-    var nfa = NFA.init(gpa);
+    // var nfa = NFA.init(gpa);
+    var builder = NfaBuilder.init(gpa);
 
-    const cur_state = try nfa.addState(.{});
-    const res = try self.parse(gpa, &errors, &nfa, cur_state, RegexCharacter.EOF);
+    const cur_state = try builder.addState(.{});
+    const res = try self.parse(gpa, &errors, &builder, cur_state, RegexCharacter.EOF);
 
-    nfa.setAcceptingState(res.accepting_state);
+    builder.setAcceptingState(res.accepting_state);
 
     return .{
-        .automata = nfa,
+        .automata = builder.build(),
         .errors = errors,
     };
 }
@@ -198,7 +200,7 @@ const ParseResult = struct {
     accepting_state: u32,
 };
 
-fn parse(self: *Self, gpa: std.mem.Allocator, errors: *Errors(SourceSpan), nfa: *NFA, initial_state: u32, parse_until: RegexCharacter) !ParseResult {
+fn parse(self: *Self, gpa: std.mem.Allocator, errors: *Errors(SourceSpan), builder: *NfaBuilder, initial_state: u32, parse_until: RegexCharacter) !ParseResult {
     std.debug.assert(switch (parse_until) {
         .EOF => true,
         .RParen => true,
@@ -224,16 +226,16 @@ fn parse(self: *Self, gpa: std.mem.Allocator, errors: *Errors(SourceSpan), nfa: 
         switch (regex_char) {
             .EOF => break,
             .Caret => {
-                nfa.markAtLineStart(cur_state);
+                builder.markAtLineStart(cur_state);
                 parsed_atom = false;
             },
             .Dollar => {
-                nfa.markAtLineEnd(cur_state);
+                builder.markAtLineEnd(cur_state);
                 parsed_atom = false;
             },
             .LBracket => {
-                const new_state = try nfa.addState(.{});
-                try self.parseBracketExpr(gpa, errors, nfa, cur_state, new_state);
+                const new_state = try builder.addState(.{});
+                try self.parseBracketExpr(gpa, errors, builder, cur_state, new_state);
                 prev_state = cur_state;
                 cur_state = new_state;
                 parsed_atom = true;
@@ -242,7 +244,7 @@ fn parse(self: *Self, gpa: std.mem.Allocator, errors: *Errors(SourceSpan), nfa: 
                 try errors.addError("Unmatched `]`", .{}, SourceSpan.fromChar(self.lexer.cur_index - 1));
             },
             .LParen => {
-                const result = try self.parse(gpa, errors, nfa, cur_state, RegexCharacter.RParen);
+                const result = try self.parse(gpa, errors, builder, cur_state, RegexCharacter.RParen);
                 prev_state = cur_state;
                 cur_state = result.accepting_state;
                 parsed_atom = true;
@@ -267,11 +269,11 @@ fn parse(self: *Self, gpa: std.mem.Allocator, errors: *Errors(SourceSpan), nfa: 
                     continue;
                 }
 
-                const new_state = try nfa.addState(.{});
+                const new_state = try builder.addState(.{});
 
-                try nfa.addEpsTransition(cur_state, prev_state);
-                try nfa.addEpsTransition(cur_state, new_state);
-                try nfa.addEpsTransition(prev_state, new_state);
+                try builder.addEpsTransition(cur_state, prev_state);
+                try builder.addEpsTransition(cur_state, new_state);
+                try builder.addEpsTransition(prev_state, new_state);
                 prev_state = cur_state;
                 cur_state = new_state;
                 parsed_atom = false;
@@ -286,7 +288,7 @@ fn parse(self: *Self, gpa: std.mem.Allocator, errors: *Errors(SourceSpan), nfa: 
                     continue;
                 }
 
-                try nfa.addEpsTransition(prev_state, cur_state);
+                try builder.addEpsTransition(prev_state, cur_state);
                 prev_state = cur_state;
                 parsed_atom = false;
             },
@@ -300,20 +302,24 @@ fn parse(self: *Self, gpa: std.mem.Allocator, errors: *Errors(SourceSpan), nfa: 
                     continue;
                 }
 
-                var last_state: u32 = undefined;
-                for (prev_state..cur_state + 1) |state| {
-                    last_state = try nfa.addState(try nfa.states.items[state].cloneWithoutAnchors(gpa));
-                }
-                try nfa.addEpsTransition(cur_state, last_state);
-                try nfa.addEpsTransition(cur_state, cur_state + 1);
+                // var last_state: u32 = undefined;
+                // for (prev_state..cur_state + 1) |state| {
+                //     last_state = try builder.addState(try nf.states.items[state].cloneWithoutAnchors(gpa));
+                // }
+                const last_state = try builder.cloneRange(prev_state, cur_state);
+                try builder.addEpsTransition(cur_state, last_state);
+                try builder.addEpsTransition(cur_state, cur_state + 1);
                 prev_state = cur_state;
                 cur_state = last_state;
                 parsed_atom = false;
             },
             .Literal => |literal_char| {
-                const new_state = try nfa.addState(.{});
+                const new_state = try builder.addState(.{});
 
-                try nfa.addTransition(cur_state, NFA.Transition.fromChar(literal_char, new_state));
+                try builder.addTransition(cur_state, NFA.Transition{
+                    .range = NFA.Transition.Range.fromChar(literal_char),
+                    .dest_index = new_state,
+                });
                 prev_state = cur_state;
                 cur_state = new_state;
                 parsed_atom = true;
@@ -333,10 +339,10 @@ fn parse(self: *Self, gpa: std.mem.Allocator, errors: *Errors(SourceSpan), nfa: 
     }
 
     if (branches.items.len > 0) {
-        cur_state = try nfa.addState(.{});
+        cur_state = try builder.addState(.{});
 
         for (branches.items) |state| {
-            try nfa.addEpsTransition(state, cur_state);
+            try builder.addEpsTransition(state, cur_state);
         }
         branches.deinit(gpa);
     }
@@ -346,7 +352,7 @@ fn parse(self: *Self, gpa: std.mem.Allocator, errors: *Errors(SourceSpan), nfa: 
     };
 }
 
-fn parseBracketExpr(self: *Self, gpa: std.mem.Allocator, errors: *Errors(SourceSpan), nfa: *NFA, cur_state: u32, new_state: u32) !void {
+fn parseBracketExpr(self: *Self, gpa: std.mem.Allocator, errors: *Errors(SourceSpan), builder: *NfaBuilder, cur_state: u32, new_state: u32) !void {
     const Range = NFA.Transition.Range;
     var added_ranges = std.ArrayListUnmanaged(Range){};
     defer added_ranges.deinit(gpa);
@@ -450,24 +456,21 @@ fn parseBracketExpr(self: *Self, gpa: std.mem.Allocator, errors: *Errors(SourceS
             cur_range_end = @as(u8, @intCast(i));
         } else if (cur_range_start) |start| {
             std.debug.assert(start <= cur_range_end);
-            try nfa.addTransition(cur_state, NFA.Transition.fromRange(start, cur_range_end, new_state));
+            try builder.addTransition(cur_state, NFA.Transition{
+                .range = Range.fromRange(start, cur_range_end),
+                .dest_index = new_state,
+            });
             cur_range_start = null;
         }
     }
 
     if (cur_range_start) |start| {
         std.debug.assert(start <= cur_range_end);
-        try nfa.addTransition(cur_state, NFA.Transition.fromRange(start, cur_range_end, new_state));
+        try builder.addTransition(cur_state, NFA.Transition{
+            .range = Range.fromRange(start, cur_range_end),
+            .dest_index = new_state,
+        });
     }
-}
-
-fn sortedInsert(allocator: std.mem.Allocator, items: *std.ArrayListUnmanaged(u8), x: u8) !void {
-    const i = std.sort.lowerBound(u8, x, items.items, {}, std.sort.asc(u8));
-    if (i < items.items.len and items.items[i] == x) {
-        return;
-    }
-
-    try items.insert(allocator, i, x);
 }
 
 test "basic" {
@@ -483,7 +486,7 @@ test "basic" {
     defer nfa_result.errors.deinit();
 
     var nfa = nfa_result.automata;
-    defer nfa.deinit();
+    defer nfa.deinit(allocator);
 
     var nfa_stack = NFA.Stack.init(allocator);
     defer nfa_stack.deinit();
@@ -510,7 +513,7 @@ test "group basic" {
     defer nfa_result.errors.deinit();
 
     var nfa = nfa_result.automata;
-    defer nfa.deinit();
+    defer nfa.deinit(allocator);
 
     var nfa_stack = NFA.Stack.init(allocator);
     defer nfa_stack.deinit();
@@ -537,7 +540,7 @@ test "alternatives" {
     defer nfa_result.errors.deinit();
 
     var nfa = nfa_result.automata;
-    defer nfa.deinit();
+    defer nfa.deinit(allocator);
 
     var nfa_stack = NFA.Stack.init(allocator);
     defer nfa_stack.deinit();
@@ -569,7 +572,7 @@ test "repeating single char" {
         defer nfa_result.errors.deinit();
 
         var nfa = nfa_result.automata;
-        defer nfa.deinit();
+        defer nfa.deinit(allocator);
 
         try std.testing.expect(try nfa.match(&nfa_stack, "foobar"));
         try std.testing.expect(try nfa.match(&nfa_stack, "foobarbaz"));
@@ -590,7 +593,7 @@ test "repeating single char" {
         defer nfa_result.errors.deinit();
 
         var nfa = nfa_result.automata;
-        defer nfa.deinit();
+        defer nfa.deinit(allocator);
 
         try std.testing.expect(try nfa.match(&nfa_stack, "foobar"));
         try std.testing.expect(try nfa.match(&nfa_stack, "foobarbaz"));
@@ -622,7 +625,7 @@ test "repeating group" {
         defer nfa_result.errors.deinit();
 
         var nfa = nfa_result.automata;
-        defer nfa.deinit();
+        defer nfa.deinit(allocator);
 
         try std.testing.expect(try nfa.match(&nfa_stack, "foobaz"));
         try std.testing.expect(try nfa.match(&nfa_stack, "foobarbaz"));
@@ -640,7 +643,7 @@ test "repeating group" {
         defer nfa_result.errors.deinit();
 
         var nfa = nfa_result.automata;
-        defer nfa.deinit();
+        defer nfa.deinit(allocator);
 
         try std.testing.expect(try nfa.match(&nfa_stack, "foobarbaz"));
         try std.testing.expect(try nfa.match(&nfa_stack, "foobarbarbarbaz"));
@@ -669,7 +672,7 @@ test "optionals" {
         defer nfa_result.errors.deinit();
 
         var nfa = nfa_result.automata;
-        defer nfa.deinit();
+        defer nfa.deinit(allocator);
 
         try std.testing.expect(try nfa.match(&nfa_stack, "b"));
         try std.testing.expect(try nfa.match(&nfa_stack, "ab"));
@@ -687,7 +690,7 @@ test "optionals" {
         defer nfa_result.errors.deinit();
 
         var nfa = nfa_result.automata;
-        defer nfa.deinit();
+        defer nfa.deinit(allocator);
 
         try std.testing.expect(try nfa.match(&nfa_stack, "bar"));
         try std.testing.expect(try nfa.match(&nfa_stack, "foobar"));
@@ -716,7 +719,7 @@ test "anchors" {
         defer nfa_result.errors.deinit();
 
         var nfa = nfa_result.automata;
-        defer nfa.deinit();
+        defer nfa.deinit(allocator);
 
         try std.testing.expect(try nfa.match(&nfa_stack, "ab"));
         try std.testing.expect(try nfa.match(&nfa_stack, "abba"));
@@ -732,7 +735,7 @@ test "anchors" {
         defer nfa_result.errors.deinit();
 
         var nfa = nfa_result.automata;
-        defer nfa.deinit();
+        defer nfa.deinit(allocator);
 
         try std.testing.expect(try nfa.match(&nfa_stack, "ab"));
         try std.testing.expect(try nfa.match(&nfa_stack, "baab"));
@@ -750,7 +753,7 @@ test "anchors" {
         defer nfa_result.errors.deinit();
 
         var nfa = nfa_result.automata;
-        defer nfa.deinit();
+        defer nfa.deinit(allocator);
 
         try std.testing.expect(!try nfa.match(&nfa_stack, "ab"));
         try std.testing.expect(!try nfa.match(&nfa_stack, "abba"));
@@ -766,7 +769,7 @@ test "anchors" {
         defer nfa_result.errors.deinit();
 
         var nfa = nfa_result.automata;
-        defer nfa.deinit();
+        defer nfa.deinit(allocator);
 
         try std.testing.expect(!try nfa.match(&nfa_stack, "ab"));
         try std.testing.expect(!try nfa.match(&nfa_stack, "baab"));
@@ -792,7 +795,7 @@ test "bracket expressions" {
         defer nfa_result.errors.deinit();
 
         var nfa = nfa_result.automata;
-        defer nfa.deinit();
+        defer nfa.deinit(allocator);
 
         try std.testing.expect(nfa_result.errors.count() == 0);
 
@@ -812,7 +815,7 @@ test "bracket expressions" {
         defer nfa_result.errors.deinit();
 
         var nfa = nfa_result.automata;
-        defer nfa.deinit();
+        defer nfa.deinit(allocator);
 
         try std.testing.expect(nfa_result.errors.count() == 0);
 
@@ -832,7 +835,7 @@ test "bracket expressions" {
         defer nfa_result.errors.deinit();
 
         var nfa = nfa_result.automata;
-        defer nfa.deinit();
+        defer nfa.deinit(allocator);
 
         try std.testing.expect(nfa_result.errors.count() == 0);
 
@@ -850,7 +853,7 @@ test "bracket expressions" {
         defer nfa_result.errors.deinit();
 
         var nfa = nfa_result.automata;
-        defer nfa.deinit();
+        defer nfa.deinit(allocator);
 
         try std.testing.expect(nfa_result.errors.count() == 0);
 
@@ -868,7 +871,7 @@ test "bracket expressions" {
         defer nfa_result.errors.deinit();
 
         var nfa = nfa_result.automata;
-        defer nfa.deinit();
+        defer nfa.deinit(allocator);
 
         try std.testing.expect(nfa_result.errors.count() == 0);
 
@@ -888,7 +891,7 @@ test "bracket expressions" {
         defer nfa_result.errors.deinit();
 
         var nfa = nfa_result.automata;
-        defer nfa.deinit();
+        defer nfa.deinit(allocator);
 
         try std.testing.expect(nfa_result.errors.count() == 0);
 
@@ -908,7 +911,7 @@ test "bracket expressions" {
         defer nfa_result.errors.deinit();
 
         var nfa = nfa_result.automata;
-        defer nfa.deinit();
+        defer nfa.deinit(allocator);
 
         try std.testing.expect(nfa_result.errors.count() == 0);
 
@@ -926,7 +929,7 @@ test "bracket expressions" {
         defer nfa_result.errors.deinit();
 
         var nfa = nfa_result.automata;
-        defer nfa.deinit();
+        defer nfa.deinit(allocator);
 
         try std.testing.expect(nfa_result.errors.count() == 0);
 
@@ -946,7 +949,7 @@ test "bracket expressions" {
         try std.testing.expect(nfa_result.errors.count() == 0);
 
         var nfa = nfa_result.automata;
-        defer nfa.deinit();
+        defer nfa.deinit(allocator);
 
         try std.testing.expect(try nfa.match(&nfa_stack, "["));
         for (std.math.minInt(u8)..'[') |c| {
@@ -964,7 +967,7 @@ test "bracket expressions" {
         try std.testing.expect(nfa_result.errors.count() == 0);
 
         var nfa = nfa_result.automata;
-        defer nfa.deinit();
+        defer nfa.deinit(allocator);
 
         try std.testing.expect(try nfa.match(&nfa_stack, "]"));
         for (std.math.minInt(u8)..']') |c| {
@@ -1006,7 +1009,7 @@ test "errors" {
         var regex = Self.init(pat);
         var nfa_result = try regex.buildNFA(allocator, arena);
 
-        defer nfa_result.automata.deinit();
+        defer nfa_result.automata.deinit(allocator);
         defer nfa_result.errors.deinit();
 
         try std.testing.expect(nfa_result.errors.count() != 0);

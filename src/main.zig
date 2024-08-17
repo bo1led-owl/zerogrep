@@ -191,7 +191,7 @@ const SearchStrategy = union(enum) {
                 gpa.free(l);
             },
             .Regex => |*r| {
-                r.*.nfa.deinit();
+                r.*.nfa.deinit(gpa);
                 r.*.nfa_stack.deinit();
             },
         }
