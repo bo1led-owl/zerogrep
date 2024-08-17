@@ -39,34 +39,6 @@ pub fn debugPrint(nfa: Self) void {
     }
 }
 
-<<<<<<< HEAD
-pub fn addState(self: *Self, state: State) !u32 {
-    try self.states.append(self.allocator, state);
-    return @intCast(self.states.items.len - 1);
-}
-
-pub fn markAtLineStart(self: *Self, i: u32) void {
-    self.states.items[i].at_line_start = true;
-}
-
-pub fn markAtLineEnd(self: *Self, i: u32) void {
-    self.states.items[i].at_line_end = true;
-}
-
-pub fn setAcceptingState(self: *Self, i: u32) void {
-    std.debug.assert(i < self.states.items.len);
-    self.accepting_state = i;
-}
-
-pub fn addTransition(self: *Self, state: u32, transition: Transition) !void {
-    try self.states.items[state].addTransition(self.allocator, transition);
-}
-
-pub fn addEpsTransition(self: *Self, state: u32, dest_index: u32) !void {
-    try self.states.items[state].addEpsTransition(self.allocator, dest_index);
-}
-
-=======
 fn getFirstTransition(self: Self, from: u32, key: u8) u32 {
     return @intCast(std.sort.lowerBound(
         Transition.Range,
@@ -189,8 +161,6 @@ pub fn match(self: Self, stack: *Stack, line: []const u8) !bool {
     return false;
 }
 
-/// add state and return its index
->>>>>>> main
 pub const Transition = struct {
     pub const Range = struct {
         start: u8 = 0,
@@ -259,8 +229,6 @@ pub const State = struct {
         self.epsilon_transitions.deinit(allocator);
     }
 };
-<<<<<<< HEAD
-=======
 
 test "basic" {
     //      a        b
@@ -399,4 +367,3 @@ test "loop" {
     try std.testing.expect(!try nfa.match(&stack, "b"));
     try std.testing.expect(!try nfa.match(&stack, "c"));
 }
->>>>>>> main
