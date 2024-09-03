@@ -101,14 +101,14 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitC
                 for (nfa_build_result.errors.items()) |err| {
                     try reportRegexError(stderr, args.pattern, err.payload, err.message);
                 }
-                nfa_build_result.automata.deinit();
+                nfa_build_result.automata.deinit(gpa);
                 return ExitCode.IncorrectUsage;
             }
 
             // TODO: limit DFA size, roll back to NFA in critical situations
             // break :strategy_blk SearchStrategy.initNFA(gpa, nfa_build_result.automata);
 
-            const dfa_builder = DfaBuilder.init(gpa);
+            var dfa_builder = DfaBuilder.init(gpa);
             const dfa = try dfa_builder.buildFromNFA(nfa_build_result.automata);
             break :strategy_blk SearchStrategy.initDFA(dfa);
         }
@@ -116,9 +116,6 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitC
     defer strategy.deinit(gpa);
 
     // nfa.debugPrint();
-
-    // var read_buffer = try std.ArrayList(u8).initCapacity(gpa, 96 * KiB);
-    // defer read_buffer.deinit();
 
     const read_buffer = try gpa.alloc(u8, 96 * KiB);
     defer gpa.free(read_buffer);

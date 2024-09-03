@@ -3,17 +3,18 @@ const Self = @This();
 const Builder = @import("NfaBuilder.zig");
 
 states: std.ArrayListUnmanaged(State) = .{},
-accepting_state: u32 = 0,
+accepting_states: std.ArrayListUnmanaged(u32) = .{},
 
 pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
     for (self.states.items) |*state| {
         state.deinit(allocator);
     }
     self.states.deinit(allocator);
+    self.accepting_states.deinit(allocator);
 }
 
 pub fn debugPrint(nfa: Self) void {
-    std.debug.print("accepting: {d}\n", .{nfa.accepting_state});
+    std.debug.print("accepting: {any}\n", .{nfa.accepting_states});
     for (0.., nfa.states.items) |i, state| {
         std.debug.print("State {d}\n", .{i});
         if (state.at_line_start) {
@@ -80,7 +81,7 @@ fn walk(self: Self, stack: *Stack, input: []const u8, at_line_start: bool) !bool
             continue;
         }
 
-        if (self.accepting_state == frame.state_index) {
+        if (std.mem.indexOfScalar(u32, self.accepting_states.items, frame.state_index) != null) {
             return true;
         }
 
@@ -174,6 +175,10 @@ pub const Transition = struct {
             return lhs.end < rhs.end;
         }
 
+        pub fn eq(lhs: Range, rhs: Range) bool {
+            return lhs.start == rhs.start and lhs.end == rhs.end;
+        }
+
         pub fn searchLessThan(ctx: void, lhs: Range, rhs: Range) bool {
             _ = ctx;
             return lhs.end < rhs.start;
@@ -197,6 +202,10 @@ pub const Transition = struct {
             };
         }
     };
+
+    pub fn lessThan(ctx: void, lhs: Transition, rhs: Transition) bool {
+        return Range.lessThan(ctx, lhs.range, rhs.range);
+    }
 
     range: Range = .{},
     dest_index: u32 = 0,
@@ -242,10 +251,10 @@ test "basic" {
         _ = try builder.addState(.{});
     }
 
-    builder.setAcceptingState(2);
+    try builder.markStateAccepting(2);
 
-    try builder.addTransition(0, Transition{.range = Transition.Range.fromChar('a'), .dest_index = 1});
-    try builder.addTransition(1, Transition{.range = Transition.Range.fromChar('b'), .dest_index = 2});
+    try builder.addTransition(0, Transition{ .range = Transition.Range.fromChar('a'), .dest_index = 1 });
+    try builder.addTransition(1, Transition{ .range = Transition.Range.fromChar('b'), .dest_index = 2 });
 
     var nfa = builder.build();
     defer nfa.deinit(allocator);
@@ -273,9 +282,9 @@ test "epsilon transition" {
         _ = try builder.addState(.{});
     }
 
-    builder.setAcceptingState(2);
+    try builder.markStateAccepting(2);
 
-    try builder.addTransition(0, Transition{.range = Transition.Range.fromChar('a'), .dest_index = 1});
+    try builder.addTransition(0, Transition{ .range = Transition.Range.fromChar('a'), .dest_index = 1 });
     try builder.addEpsTransition(1, 2);
 
     var nfa = builder.build();
@@ -283,7 +292,6 @@ test "epsilon transition" {
 
     var stack = Stack.init(allocator);
     defer stack.deinit();
-
 
     try std.testing.expect(try nfa.match(&stack, "ab"));
     try std.testing.expect(try nfa.match(&stack, "cab"));
@@ -309,11 +317,11 @@ test "branching" {
     for (0..5) |_| {
         _ = try builder.addState(.{});
     }
-    builder.setAcceptingState(4);
+    try builder.markStateAccepting(4);
 
-    try builder.addTransition(0, Transition{.range = Transition.Range.fromChar('a'), .dest_index = 1});
-    try builder.addTransition(0, Transition{.range = Transition.Range.fromChar('b'), .dest_index = 2});
-    try builder.addTransition(0, Transition{.range = Transition.Range.fromChar('c'), .dest_index = 3});
+    try builder.addTransition(0, Transition{ .range = Transition.Range.fromChar('a'), .dest_index = 1 });
+    try builder.addTransition(0, Transition{ .range = Transition.Range.fromChar('b'), .dest_index = 2 });
+    try builder.addTransition(0, Transition{ .range = Transition.Range.fromChar('c'), .dest_index = 3 });
 
     try builder.addEpsTransition(1, 4);
     try builder.addEpsTransition(2, 4);
@@ -348,9 +356,9 @@ test "loop" {
     for (0..3) |_| {
         _ = try builder.addState(.{});
     }
-    builder.setAcceptingState(2);
+    try builder.markStateAccepting(2);
 
-    try builder.addTransition(0, Transition{.range = Transition.Range.fromChar('a'), .dest_index = 1});
+    try builder.addTransition(0, Transition{ .range = Transition.Range.fromChar('a'), .dest_index = 1 });
     try builder.addEpsTransition(1, 0);
     try builder.addEpsTransition(1, 2);
 

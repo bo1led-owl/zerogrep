@@ -47,9 +47,9 @@ pub fn markAtLineEnd(self: *Self, i: u32) void {
     self.result.states.items[i].at_line_end = true;
 }
 
-pub fn setAcceptingState(self: *Self, i: u32) void {
+pub fn markStateAccepting(self: *Self, i: u32) !void {
     std.debug.assert(i < self.result.states.items.len);
-    self.result.accepting_state = i;
+    try self.result.accepting_states.append(self.allocator, i);
 }
 
 pub fn addTransition(self: *Self, state: u32, transition: Transition) !void {
