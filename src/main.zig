@@ -132,6 +132,7 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitC
                     .data_only = args.data_only,
                     .multiple_files = multiple_files,
                     .first_file = first_file,
+                    .print_line_numbers = args.pretty,
                     .pretty = args.pretty,
                 };
                 if (try handleFile(file, path, read_buffer, stdout, &strategy, flags)) {
@@ -146,6 +147,7 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitC
             .data_only = args.data_only,
             .multiple_files = false,
             .first_file = true,
+            .print_line_numbers = false,
             .pretty = args.pretty,
         };
         _ = try handleFile(stdin_file, "stdin", read_buffer, stdout, &strategy, flags);
@@ -253,6 +255,7 @@ pub fn checkRecursively(gpa: std.mem.Allocator, args: cli.Args, cwd: std.fs.Dir,
                     .data_only = args.data_only,
                     .multiple_files = true,
                     .first_file = first_file,
+                    .print_line_numbers = args.pretty,
                     .pretty = args.pretty,
                 };
                 if (try handleFile(file, path, read_buffer, stdout, strategy, flags)) {
@@ -285,6 +288,7 @@ pub fn checkRecursively(gpa: std.mem.Allocator, args: cli.Args, cwd: std.fs.Dir,
                                 .data_only = args.data_only,
                                 .multiple_files = true,
                                 .first_file = first_file,
+                                .print_line_numbers = args.pretty,
                                 .pretty = args.pretty,
                             };
 
@@ -305,6 +309,7 @@ const HandleFileFlags = struct {
     data_only: bool,
     multiple_files: bool,
     first_file: bool,
+    print_line_numbers: bool,
     pretty: bool,
 };
 
@@ -401,7 +406,7 @@ fn handleLine(stdout: anytype, filename: []const u8, line_number: u32, strategy:
 
         if (!flags.data_only) {
             const should_print_filename = !flags.data_only and flags.multiple_files and !printed.*;
-            const should_print_line_number = !flags.data_only and !printed_line_number;
+            const should_print_line_number = flags.print_line_numbers and !flags.data_only and !printed_line_number;
 
             if (should_print_filename) {
                 try stdout.print("{s}{s}{s}\n", .{ cli.ANSI.Fg.Magenta, filename, cli.ANSI.Reset });
