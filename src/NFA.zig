@@ -260,13 +260,13 @@ test "basic" {
     var stack = Stack.init(allocator);
     defer stack.deinit();
 
-    try std.testing.expect(try nfa.match(&stack, "ab"));
-    try std.testing.expect(try nfa.match(&stack, "cab"));
-    try std.testing.expect(try nfa.match(&stack, "abc"));
-    try std.testing.expect(!try nfa.match(&stack, "a"));
-    try std.testing.expect(!try nfa.match(&stack, "b"));
-    try std.testing.expect(!try nfa.match(&stack, ""));
-    try std.testing.expect(!try nfa.match(&stack, "ac"));
+    try std.testing.expect((try nfa.match(&stack, "ab") != null));
+    try std.testing.expect((try nfa.match(&stack, "cab") != null));
+    try std.testing.expect((try nfa.match(&stack, "abc") != null));
+    try std.testing.expect(!(try nfa.match(&stack, "a") != null));
+    try std.testing.expect(!(try nfa.match(&stack, "b") != null));
+    try std.testing.expect(!(try nfa.match(&stack, "") != null));
+    try std.testing.expect(!(try nfa.match(&stack, "ac") != null));
 }
 
 test "epsilon transition" {
@@ -291,12 +291,12 @@ test "epsilon transition" {
     var stack = Stack.init(allocator);
     defer stack.deinit();
 
-    try std.testing.expect(try nfa.match(&stack, "ab"));
-    try std.testing.expect(try nfa.match(&stack, "cab"));
-    try std.testing.expect(try nfa.match(&stack, "abc"));
-    try std.testing.expect(try nfa.match(&stack, "a"));
-    try std.testing.expect(!try nfa.match(&stack, "b"));
-    try std.testing.expect(!try nfa.match(&stack, ""));
+    try std.testing.expect((try nfa.match(&stack, "ab") != null));
+    try std.testing.expect((try nfa.match(&stack, "cab") != null));
+    try std.testing.expect((try nfa.match(&stack, "abc") != null));
+    try std.testing.expect((try nfa.match(&stack, "a") != null));
+    try std.testing.expect(!(try nfa.match(&stack, "b") != null));
+    try std.testing.expect(!(try nfa.match(&stack, "") != null));
 }
 
 test "branching" {
@@ -331,15 +331,15 @@ test "branching" {
     var stack = Stack.init(allocator);
     defer stack.deinit();
 
-    try std.testing.expect(try nfa.match(&stack, "ab"));
-    try std.testing.expect(try nfa.match(&stack, "cab"));
-    try std.testing.expect(try nfa.match(&stack, "abc"));
-    try std.testing.expect(try nfa.match(&stack, "a"));
-    try std.testing.expect(try nfa.match(&stack, "b"));
-    try std.testing.expect(try nfa.match(&stack, "c"));
-    try std.testing.expect(!try nfa.match(&stack, ""));
-    try std.testing.expect(!try nfa.match(&stack, "d"));
-    try std.testing.expect(!try nfa.match(&stack, "foo"));
+    try std.testing.expect((try nfa.match(&stack, "ab") != null));
+    try std.testing.expect((try nfa.match(&stack, "cab") != null));
+    try std.testing.expect((try nfa.match(&stack, "abc") != null));
+    try std.testing.expect((try nfa.match(&stack, "a") != null));
+    try std.testing.expect((try nfa.match(&stack, "b") != null));
+    try std.testing.expect((try nfa.match(&stack, "c") != null));
+    try std.testing.expect(!(try nfa.match(&stack, "") != null));
+    try std.testing.expect(!(try nfa.match(&stack, "d") != null));
+    try std.testing.expect(!(try nfa.match(&stack, "foo") != null));
 }
 
 test "loop" {
@@ -366,10 +366,10 @@ test "loop" {
     var stack = Stack.init(allocator);
     defer stack.deinit();
 
-    try std.testing.expect(!try nfa.match(&stack, ""));
-    try std.testing.expect(try nfa.match(&stack, "a"));
-    try std.testing.expect(try nfa.match(&stack, "aa"));
-    try std.testing.expect(try nfa.match(&stack, "baab"));
-    try std.testing.expect(!try nfa.match(&stack, "b"));
-    try std.testing.expect(!try nfa.match(&stack, "c"));
+    try std.testing.expect(!(try nfa.match(&stack, "") != null));
+    try std.testing.expect((try nfa.match(&stack, "a") != null));
+    try std.testing.expect((try nfa.match(&stack, "aa") != null));
+    try std.testing.expect((try nfa.match(&stack, "baab") != null));
+    try std.testing.expect(!(try nfa.match(&stack, "b") != null));
+    try std.testing.expect(!(try nfa.match(&stack, "c") != null));
 }

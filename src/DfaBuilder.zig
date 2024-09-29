@@ -402,10 +402,10 @@ test "basic NFA to DFA" {
     var dfa = try dfa_builder.buildFromNFA(nfa);
     defer dfa.deinit(allocator);
 
-    try std.testing.expect(dfa.match("000"));
-    try std.testing.expect(dfa.match("100"));
-    try std.testing.expect(dfa.match("01110100"));
-    try std.testing.expect(dfa.match("1110100"));
+    try std.testing.expect(dfa.match("000") != null);
+    try std.testing.expect(dfa.match("100") != null);
+    try std.testing.expect(dfa.match("01110100") != null);
+    try std.testing.expect(dfa.match("1110100") != null);
 }
 
 test "NFA loop" {
@@ -439,12 +439,12 @@ test "NFA loop" {
     var dfa = try dfa_builder.buildFromNFA(nfa);
     defer dfa.deinit(allocator);
 
-    try std.testing.expect(dfa.match("ab"));
-    try std.testing.expect(dfa.match("aab"));
-    try std.testing.expect(dfa.match("aaaab"));
-    try std.testing.expect(dfa.match("aaaaaaaaab"));
-    try std.testing.expect(!dfa.match(""));
-    try std.testing.expect(!dfa.match("aaaaaaaaaaaaaa"));
-    try std.testing.expect(!dfa.match("b"));
-    try std.testing.expect(!dfa.match("baa"));
+    try std.testing.expect(dfa.match("ab") != null);
+    try std.testing.expect(dfa.match("aab") != null);
+    try std.testing.expect(dfa.match("aaaab") != null);
+    try std.testing.expect(dfa.match("aaaaaaaaab") != null);
+    try std.testing.expect(!(dfa.match("") != null));
+    try std.testing.expect(!(dfa.match("aaaaaaaaaaaaaa") != null));
+    try std.testing.expect(!(dfa.match("b") != null));
+    try std.testing.expect(!(dfa.match("baa") != null));
 }

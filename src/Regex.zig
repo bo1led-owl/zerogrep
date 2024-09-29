@@ -58,6 +58,7 @@ const Lexer = struct {
                 '|' => RegexCharacter.Pipe,
                 '^' => RegexCharacter.Caret,
                 '$' => RegexCharacter.Dollar,
+                '.' => RegexCharacter.Dot,
                 else => |c| RegexCharacter{ .Literal = c },
             };
         } else {
@@ -90,6 +91,7 @@ const RegexCharacter = union(enum) {
     Plus,
     Caret,
     Dollar,
+    Dot,
     Literal: u8,
     Erroneous,
 
@@ -256,6 +258,16 @@ fn parse(self: *Self, gpa: std.mem.Allocator, errors: *Errors(SourceSpan), build
             .RParen => {
                 try errors.addError("Unmatched `)`", .{}, SourceSpan.fromChar(self.lexer.cur_index - 1));
                 parsed_atom = false;
+            },
+            .Dot => {
+                const new_state = try builder.addState(.{});
+
+                try builder.addTransition(cur_state, NFA.Transition{
+                    .range = NFA.Transition.Range.fromRange(std.math.minInt(u8), std.math.maxInt(u8)),
+                    .dest_index = new_state,
+                });
+                prev_state = cur_state;
+                cur_state = new_state;
             },
             .Pipe => {
                 try branches.append(gpa, cur_state);
@@ -488,13 +500,13 @@ test "basic" {
     var nfa_stack = NFA.Stack.init(allocator);
     defer nfa_stack.deinit();
 
-    try std.testing.expect(try nfa.match(&nfa_stack, "foobar"));
-    try std.testing.expect(try nfa.match(&nfa_stack, "foobarbaz"));
-    try std.testing.expect(try nfa.match(&nfa_stack, "bazfoobar"));
-    try std.testing.expect(!try nfa.match(&nfa_stack, ""));
-    try std.testing.expect(!try nfa.match(&nfa_stack, "foo"));
-    try std.testing.expect(!try nfa.match(&nfa_stack, "bar"));
-    try std.testing.expect(!try nfa.match(&nfa_stack, "baz"));
+    try std.testing.expect(try nfa.match(&nfa_stack, "foobar") != null);
+    try std.testing.expect(try nfa.match(&nfa_stack, "foobarbaz") != null);
+    try std.testing.expect(try nfa.match(&nfa_stack, "bazfoobar") != null);
+    try std.testing.expect(!(try nfa.match(&nfa_stack, "") != null));
+    try std.testing.expect(!(try nfa.match(&nfa_stack, "foo") != null));
+    try std.testing.expect(!(try nfa.match(&nfa_stack, "bar") != null));
+    try std.testing.expect(!(try nfa.match(&nfa_stack, "baz") != null));
 }
 
 test "group basic" {
@@ -515,13 +527,13 @@ test "group basic" {
     var nfa_stack = NFA.Stack.init(allocator);
     defer nfa_stack.deinit();
 
-    try std.testing.expect(try nfa.match(&nfa_stack, "foobar"));
-    try std.testing.expect(try nfa.match(&nfa_stack, "foobarbaz"));
-    try std.testing.expect(try nfa.match(&nfa_stack, "bazfoobar"));
-    try std.testing.expect(!try nfa.match(&nfa_stack, ""));
-    try std.testing.expect(!try nfa.match(&nfa_stack, "foo"));
-    try std.testing.expect(!try nfa.match(&nfa_stack, "bar"));
-    try std.testing.expect(!try nfa.match(&nfa_stack, "baz"));
+    try std.testing.expect((try nfa.match(&nfa_stack, "foobar") != null));
+    try std.testing.expect((try nfa.match(&nfa_stack, "foobarbaz") != null));
+    try std.testing.expect((try nfa.match(&nfa_stack, "bazfoobar") != null));
+    try std.testing.expect(!(try nfa.match(&nfa_stack, "") != null));
+    try std.testing.expect(!(try nfa.match(&nfa_stack, "foo") != null));
+    try std.testing.expect(!(try nfa.match(&nfa_stack, "bar") != null));
+    try std.testing.expect(!(try nfa.match(&nfa_stack, "baz") != null));
 }
 
 test "alternatives" {
@@ -542,15 +554,15 @@ test "alternatives" {
     var nfa_stack = NFA.Stack.init(allocator);
     defer nfa_stack.deinit();
 
-    try std.testing.expect(try nfa.match(&nfa_stack, "foobar"));
-    try std.testing.expect(try nfa.match(&nfa_stack, "foobarbaz"));
-    try std.testing.expect(try nfa.match(&nfa_stack, "bazfoobar"));
-    try std.testing.expect(try nfa.match(&nfa_stack, "foo"));
-    try std.testing.expect(try nfa.match(&nfa_stack, "bar"));
-    try std.testing.expect(try nfa.match(&nfa_stack, "baz"));
-    try std.testing.expect(!try nfa.match(&nfa_stack, ""));
-    try std.testing.expect(!try nfa.match(&nfa_stack, "random"));
-    try std.testing.expect(!try nfa.match(&nfa_stack, "word"));
+    try std.testing.expect((try nfa.match(&nfa_stack, "foobar") != null));
+    try std.testing.expect((try nfa.match(&nfa_stack, "foobarbaz") != null));
+    try std.testing.expect((try nfa.match(&nfa_stack, "bazfoobar") != null));
+    try std.testing.expect((try nfa.match(&nfa_stack, "foo") != null));
+    try std.testing.expect((try nfa.match(&nfa_stack, "bar") != null));
+    try std.testing.expect((try nfa.match(&nfa_stack, "baz") != null));
+    try std.testing.expect(!(try nfa.match(&nfa_stack, "") != null));
+    try std.testing.expect(!(try nfa.match(&nfa_stack, "random") != null));
+    try std.testing.expect(!(try nfa.match(&nfa_stack, "word") != null));
 }
 
 test "repeating single char" {
@@ -571,16 +583,16 @@ test "repeating single char" {
         var nfa = nfa_result.automata;
         defer nfa.deinit(allocator);
 
-        try std.testing.expect(try nfa.match(&nfa_stack, "foobar"));
-        try std.testing.expect(try nfa.match(&nfa_stack, "foobarbaz"));
-        try std.testing.expect(try nfa.match(&nfa_stack, "bazfoobar"));
-        try std.testing.expect(try nfa.match(&nfa_stack, "foo"));
-        try std.testing.expect(try nfa.match(&nfa_stack, "fo"));
-        try std.testing.expect(try nfa.match(&nfa_stack, "fooooo"));
-        try std.testing.expect(!try nfa.match(&nfa_stack, ""));
-        try std.testing.expect(!try nfa.match(&nfa_stack, "f"));
-        try std.testing.expect(!try nfa.match(&nfa_stack, "bar"));
-        try std.testing.expect(!try nfa.match(&nfa_stack, "baz"));
+        try std.testing.expect((try nfa.match(&nfa_stack, "foobar") != null));
+        try std.testing.expect((try nfa.match(&nfa_stack, "foobarbaz") != null));
+        try std.testing.expect((try nfa.match(&nfa_stack, "bazfoobar") != null));
+        try std.testing.expect((try nfa.match(&nfa_stack, "foo") != null));
+        try std.testing.expect((try nfa.match(&nfa_stack, "fo") != null));
+        try std.testing.expect((try nfa.match(&nfa_stack, "fooooo") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "f") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "bar") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "baz") != null));
     }
     {
         var regex = Self.init("foo+");
@@ -592,16 +604,16 @@ test "repeating single char" {
         var nfa = nfa_result.automata;
         defer nfa.deinit(allocator);
 
-        try std.testing.expect(try nfa.match(&nfa_stack, "foobar"));
-        try std.testing.expect(try nfa.match(&nfa_stack, "foobarbaz"));
-        try std.testing.expect(try nfa.match(&nfa_stack, "bazfoobar"));
-        try std.testing.expect(try nfa.match(&nfa_stack, "foo"));
-        try std.testing.expect(try nfa.match(&nfa_stack, "fooo"));
-        try std.testing.expect(try nfa.match(&nfa_stack, "fooooo"));
-        try std.testing.expect(!try nfa.match(&nfa_stack, ""));
-        try std.testing.expect(!try nfa.match(&nfa_stack, "f"));
-        try std.testing.expect(!try nfa.match(&nfa_stack, "bar"));
-        try std.testing.expect(!try nfa.match(&nfa_stack, "baz"));
+        try std.testing.expect((try nfa.match(&nfa_stack, "foobar") != null));
+        try std.testing.expect((try nfa.match(&nfa_stack, "foobarbaz") != null));
+        try std.testing.expect((try nfa.match(&nfa_stack, "bazfoobar") != null));
+        try std.testing.expect((try nfa.match(&nfa_stack, "foo") != null));
+        try std.testing.expect((try nfa.match(&nfa_stack, "fooo") != null));
+        try std.testing.expect((try nfa.match(&nfa_stack, "fooooo") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "f") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "bar") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "baz") != null));
     }
 }
 
@@ -624,13 +636,13 @@ test "repeating group" {
         var nfa = nfa_result.automata;
         defer nfa.deinit(allocator);
 
-        try std.testing.expect(try nfa.match(&nfa_stack, "foobaz"));
-        try std.testing.expect(try nfa.match(&nfa_stack, "foobarbaz"));
-        try std.testing.expect(try nfa.match(&nfa_stack, "foobarbarbarbaz"));
-        try std.testing.expect(!try nfa.match(&nfa_stack, ""));
-        try std.testing.expect(!try nfa.match(&nfa_stack, "foo"));
-        try std.testing.expect(!try nfa.match(&nfa_stack, "bar"));
-        try std.testing.expect(!try nfa.match(&nfa_stack, "baz"));
+        try std.testing.expect((try nfa.match(&nfa_stack, "foobaz") != null));
+        try std.testing.expect((try nfa.match(&nfa_stack, "foobarbaz") != null));
+        try std.testing.expect((try nfa.match(&nfa_stack, "foobarbarbarbaz") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "foo") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "bar") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "baz") != null));
     }
     {
         var regex = Self.init("foo(bar)+baz");
@@ -642,13 +654,13 @@ test "repeating group" {
         var nfa = nfa_result.automata;
         defer nfa.deinit(allocator);
 
-        try std.testing.expect(try nfa.match(&nfa_stack, "foobarbaz"));
-        try std.testing.expect(try nfa.match(&nfa_stack, "foobarbarbarbaz"));
-        try std.testing.expect(!try nfa.match(&nfa_stack, ""));
-        try std.testing.expect(!try nfa.match(&nfa_stack, "foo"));
-        try std.testing.expect(!try nfa.match(&nfa_stack, "bar"));
-        try std.testing.expect(!try nfa.match(&nfa_stack, "baz"));
-        try std.testing.expect(!try nfa.match(&nfa_stack, "foobaz"));
+        try std.testing.expect((try nfa.match(&nfa_stack, "foobarbaz") != null));
+        try std.testing.expect((try nfa.match(&nfa_stack, "foobarbarbarbaz") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "foo") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "bar") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "baz") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "foobaz") != null));
     }
 }
 
@@ -671,13 +683,13 @@ test "optionals" {
         var nfa = nfa_result.automata;
         defer nfa.deinit(allocator);
 
-        try std.testing.expect(try nfa.match(&nfa_stack, "b"));
-        try std.testing.expect(try nfa.match(&nfa_stack, "ab"));
-        try std.testing.expect(try nfa.match(&nfa_stack, "ba"));
-        try std.testing.expect(try nfa.match(&nfa_stack, "baba"));
-        try std.testing.expect(!try nfa.match(&nfa_stack, ""));
-        try std.testing.expect(!try nfa.match(&nfa_stack, "a"));
-        try std.testing.expect(!try nfa.match(&nfa_stack, "foo"));
+        try std.testing.expect((try nfa.match(&nfa_stack, "b") != null));
+        try std.testing.expect((try nfa.match(&nfa_stack, "ab") != null));
+        try std.testing.expect((try nfa.match(&nfa_stack, "ba") != null));
+        try std.testing.expect((try nfa.match(&nfa_stack, "baba") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "a") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "foo") != null));
     }
     {
         var regex = Self.init("(foo)?bar");
@@ -689,13 +701,13 @@ test "optionals" {
         var nfa = nfa_result.automata;
         defer nfa.deinit(allocator);
 
-        try std.testing.expect(try nfa.match(&nfa_stack, "bar"));
-        try std.testing.expect(try nfa.match(&nfa_stack, "foobar"));
-        try std.testing.expect(try nfa.match(&nfa_stack, "foobarbaz"));
-        try std.testing.expect(!try nfa.match(&nfa_stack, ""));
-        try std.testing.expect(!try nfa.match(&nfa_stack, "foo"));
-        try std.testing.expect(!try nfa.match(&nfa_stack, "baz"));
-        try std.testing.expect(!try nfa.match(&nfa_stack, "foobaz"));
+        try std.testing.expect((try nfa.match(&nfa_stack, "bar") != null));
+        try std.testing.expect((try nfa.match(&nfa_stack, "foobar") != null));
+        try std.testing.expect((try nfa.match(&nfa_stack, "foobarbaz") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "foo") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "baz") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "foobaz") != null));
     }
 }
 
@@ -718,11 +730,11 @@ test "anchors" {
         var nfa = nfa_result.automata;
         defer nfa.deinit(allocator);
 
-        try std.testing.expect(try nfa.match(&nfa_stack, "ab"));
-        try std.testing.expect(try nfa.match(&nfa_stack, "abba"));
-        try std.testing.expect(!try nfa.match(&nfa_stack, ""));
-        try std.testing.expect(!try nfa.match(&nfa_stack, "bab"));
-        try std.testing.expect(!try nfa.match(&nfa_stack, "foo"));
+        try std.testing.expect((try nfa.match(&nfa_stack, "ab") != null));
+        try std.testing.expect((try nfa.match(&nfa_stack, "abba") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "bab") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "foo") != null));
     }
     {
         var regex = Self.init("ab$");
@@ -734,12 +746,12 @@ test "anchors" {
         var nfa = nfa_result.automata;
         defer nfa.deinit(allocator);
 
-        try std.testing.expect(try nfa.match(&nfa_stack, "ab"));
-        try std.testing.expect(try nfa.match(&nfa_stack, "baab"));
-        try std.testing.expect(try nfa.match(&nfa_stack, "bab"));
-        try std.testing.expect(!try nfa.match(&nfa_stack, ""));
-        try std.testing.expect(!try nfa.match(&nfa_stack, "aba"));
-        try std.testing.expect(!try nfa.match(&nfa_stack, "foo"));
+        try std.testing.expect((try nfa.match(&nfa_stack, "ab") != null));
+        try std.testing.expect((try nfa.match(&nfa_stack, "baab") != null));
+        try std.testing.expect((try nfa.match(&nfa_stack, "bab") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "aba") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "foo") != null));
     }
 
     {
@@ -752,11 +764,11 @@ test "anchors" {
         var nfa = nfa_result.automata;
         defer nfa.deinit(allocator);
 
-        try std.testing.expect(!try nfa.match(&nfa_stack, "ab"));
-        try std.testing.expect(!try nfa.match(&nfa_stack, "abba"));
-        try std.testing.expect(!try nfa.match(&nfa_stack, ""));
-        try std.testing.expect(!try nfa.match(&nfa_stack, "bab"));
-        try std.testing.expect(!try nfa.match(&nfa_stack, "foo"));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "ab") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "abba") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "bab") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "foo") != null));
     }
     {
         var regex = Self.init("a$b$");
@@ -768,12 +780,12 @@ test "anchors" {
         var nfa = nfa_result.automata;
         defer nfa.deinit(allocator);
 
-        try std.testing.expect(!try nfa.match(&nfa_stack, "ab"));
-        try std.testing.expect(!try nfa.match(&nfa_stack, "baab"));
-        try std.testing.expect(!try nfa.match(&nfa_stack, "bab"));
-        try std.testing.expect(!try nfa.match(&nfa_stack, ""));
-        try std.testing.expect(!try nfa.match(&nfa_stack, "aba"));
-        try std.testing.expect(!try nfa.match(&nfa_stack, "foo"));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "ab") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "baab") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "bab") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "aba") != null));
+        try std.testing.expect(!(try nfa.match(&nfa_stack, "foo") != null));
     }
 }
 
@@ -797,13 +809,27 @@ test "bracket expressions" {
         try std.testing.expect(nfa_result.errors.count() == 0);
 
         for ('a'..'z' + 1) |c| {
-            try std.testing.expect(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+            try std.testing.expect((try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}) != null));
         }
         for (std.math.minInt(u8)..'a') |c| {
-            try std.testing.expect(!try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+            try std.testing.expect(!(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}) != null));
         }
         for ('z' + 1..std.math.maxInt(u8)) |c| {
-            try std.testing.expect(!try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+            try std.testing.expect(!(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}) != null));
+        }
+    }
+    {
+        var regex = Self.init(".");
+        var nfa_result = try regex.buildNFA(allocator, arena);
+        defer nfa_result.errors.deinit();
+
+        var nfa = nfa_result.automata;
+        defer nfa.deinit(allocator);
+
+        try std.testing.expect(nfa_result.errors.count() == 0);
+
+        for (std.math.minInt(u8)..std.math.maxInt(u8)) |c| {
+            try std.testing.expect(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}) != null);
         }
     }
     {
@@ -817,13 +843,13 @@ test "bracket expressions" {
         try std.testing.expect(nfa_result.errors.count() == 0);
 
         for ('A'..'Z' + 1) |c| {
-            try std.testing.expect(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+            try std.testing.expect((try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}) != null));
         }
         for (std.math.minInt(u8)..'A') |c| {
-            try std.testing.expect(!try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+            try std.testing.expect(!(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}) != null));
         }
         for ('Z' + 1..std.math.maxInt(u8)) |c| {
-            try std.testing.expect(!try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+            try std.testing.expect(!(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}) != null));
         }
     }
     {
@@ -838,9 +864,9 @@ test "bracket expressions" {
 
         for (std.math.minInt(u8)..std.math.maxInt(u8)) |c| {
             if ('a' <= c and c <= 'z' or 'A' <= c and c <= 'Z') {
-                try std.testing.expect(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+                try std.testing.expect((try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}) != null));
             } else {
-                try std.testing.expect(!try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+                try std.testing.expect(!(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}) != null));
             }
         }
     }
@@ -856,9 +882,9 @@ test "bracket expressions" {
 
         for (std.math.minInt(u8)..std.math.maxInt(u8)) |c| {
             if ('a' <= c and c <= 'z' or 'A' <= c and c <= 'Z') {
-                try std.testing.expect(!try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+                try std.testing.expect(!(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}) != null));
             } else {
-                try std.testing.expect(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+                try std.testing.expect((try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}) != null));
             }
         }
     }
@@ -873,13 +899,13 @@ test "bracket expressions" {
         try std.testing.expect(nfa_result.errors.count() == 0);
 
         for ('a'..'f' + 1) |c| {
-            try std.testing.expect(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+            try std.testing.expect((try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}) != null));
         }
         for (std.math.minInt(u8)..'a') |c| {
-            try std.testing.expect(!try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+            try std.testing.expect(!(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}) != null));
         }
         for ('f' + 1..std.math.maxInt(u8)) |c| {
-            try std.testing.expect(!try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+            try std.testing.expect(!(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}) != null));
         }
     }
     {
@@ -893,13 +919,13 @@ test "bracket expressions" {
         try std.testing.expect(nfa_result.errors.count() == 0);
 
         for ('a'..'f' + 1) |c| {
-            try std.testing.expect(!try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+            try std.testing.expect(!(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}) != null));
         }
         for (std.math.minInt(u8)..'a') |c| {
-            try std.testing.expect(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+            try std.testing.expect((try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}) != null));
         }
         for ('f' + 1..std.math.maxInt(u8)) |c| {
-            try std.testing.expect(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+            try std.testing.expect((try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}) != null));
         }
     }
     {
@@ -914,9 +940,9 @@ test "bracket expressions" {
 
         for (std.math.minInt(u8)..std.math.maxInt(u8)) |c| {
             if (c == 'a' or c == '-') {
-                try std.testing.expect(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+                try std.testing.expect((try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}) != null));
             } else {
-                try std.testing.expect(!try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+                try std.testing.expect(!(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}) != null));
             }
         }
     }
@@ -932,9 +958,9 @@ test "bracket expressions" {
 
         for (std.math.minInt(u8)..std.math.maxInt(u8)) |c| {
             if (c == 'a' or c == '-') {
-                try std.testing.expect(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+                try std.testing.expect((try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}) != null));
             } else {
-                try std.testing.expect(!try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+                try std.testing.expect(!(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}) != null));
             }
         }
     }
@@ -948,12 +974,12 @@ test "bracket expressions" {
         var nfa = nfa_result.automata;
         defer nfa.deinit(allocator);
 
-        try std.testing.expect(try nfa.match(&nfa_stack, "["));
+        try std.testing.expect((try nfa.match(&nfa_stack, "[") != null));
         for (std.math.minInt(u8)..'[') |c| {
-            try std.testing.expect(!try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+            try std.testing.expect(!(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}) != null));
         }
         for (']' + 1..std.math.maxInt(u8)) |c| {
-            try std.testing.expect(!try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+            try std.testing.expect(!(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}) != null));
         }
     }
     {
@@ -966,12 +992,12 @@ test "bracket expressions" {
         var nfa = nfa_result.automata;
         defer nfa.deinit(allocator);
 
-        try std.testing.expect(try nfa.match(&nfa_stack, "]"));
+        try std.testing.expect((try nfa.match(&nfa_stack, "]") != null));
         for (std.math.minInt(u8)..']') |c| {
-            try std.testing.expect(!try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+            try std.testing.expect(!(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}) != null));
         }
         for (']' + 1..std.math.maxInt(u8)) |c| {
-            try std.testing.expect(!try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}));
+            try std.testing.expect(!(try nfa.match(&nfa_stack, &[1]u8{@intCast(c)}) != null));
         }
     }
 }
