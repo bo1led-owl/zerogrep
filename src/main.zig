@@ -115,8 +115,6 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitC
     };
     defer strategy.deinit(gpa);
 
-    // nfa.debugPrint();
-
     const read_buffer = try gpa.alloc(u8, 96 * KiB);
     defer gpa.free(read_buffer);
 

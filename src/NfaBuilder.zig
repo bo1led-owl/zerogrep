@@ -64,5 +64,7 @@ pub fn addTransition(self: *Self, state: u32, transition: Transition) !void {
 }
 
 pub fn addEpsTransition(self: *Self, state: u32, dest_index: u32) !void {
-    try self.result.states.items[state].epsilon_transitions.append(self.allocator, dest_index);
+    if (std.mem.indexOfScalar(u32, self.result.states.items[state].epsilon_transitions.items, dest_index) == null) {
+        try self.result.states.items[state].epsilon_transitions.append(self.allocator, dest_index);
+    }
 }

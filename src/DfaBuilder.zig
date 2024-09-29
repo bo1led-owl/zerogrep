@@ -47,7 +47,7 @@ const ScanlineEvent = struct {
     delta: i8,
     dest_index: u32,
 
-    pub fn lessThan(ctx: void, lhs: ScanlineEvent, rhs: ScanlineEvent) bool {
+    pub fn cmp(ctx: void, lhs: ScanlineEvent, rhs: ScanlineEvent) bool {
         _ = ctx;
         if (lhs.key != rhs.key) {
             return lhs.key < rhs.key;
@@ -58,6 +58,27 @@ const ScanlineEvent = struct {
 
 const Scanline = std.ArrayList(ScanlineEvent);
 
+fn populateScanline(scanline: *Scanline, cur_set: []const u32, nfa_states: []const NFA.State) !void {
+    scanline.clearRetainingCapacity();
+    for (cur_set) |state| {
+        for (0..nfa_states[state].transitions.len) |transition_i| {
+            const transition = nfa_states[state].transitions.get(transition_i);
+            try scanline.append(ScanlineEvent{
+                .key = transition.range.start,
+                .delta = 1,
+                .dest_index = transition.dest_index,
+            });
+            try scanline.append(ScanlineEvent{
+                .key = transition.range.end,
+                .delta = -1,
+                .dest_index = transition.dest_index,
+            });
+        }
+    }
+
+    std.mem.sort(ScanlineEvent, scanline.items, {}, ScanlineEvent.cmp);
+}
+
 /// https://en.wikipedia.org/wiki/Powerset_construction
 pub fn buildFromNFA(self: *Self, nfa: NFA) std.mem.Allocator.Error!DFA {
     self.result = DFA{};
@@ -66,88 +87,26 @@ pub fn buildFromNFA(self: *Self, nfa: NFA) std.mem.Allocator.Error!DFA {
     var set_list = try StateSetList.init(self.allocator);
     defer set_list.deinit();
 
-    try set_list.getOrInsertEpsilonClosure(self, nfa, 0);
+    try set_list.ensureEpsilonClosureExists(self, nfa, 0);
 
-    {
-        var scanline = Scanline.init(self.allocator);
-        defer scanline.deinit();
+    var scanline = Scanline.init(self.allocator);
+    defer scanline.deinit();
 
-        const nfa_state_count = try self.allocator.alloc(u32, nfa.states.items.len);
-        @memset(nfa_state_count, 0);
-        defer self.allocator.free(nfa_state_count);
+    var nfa_states_buffer = std.ArrayList(u32).init(self.allocator);
+    defer nfa_states_buffer.deinit();
 
-        var nfa_states_set = std.ArrayList(u32).init(self.allocator);
-        defer nfa_states_set.deinit();
+    while (set_list.getNextSet()) |cur_set_dfa_state_pair| {
+        const cur_set = cur_set_dfa_state_pair.set;
+        const cur_dfa_state = cur_set_dfa_state_pair.dfa_state;
 
-        while (set_list.getNextSet()) |cur_set_dfa_state_pair| {
-            const cur_set = cur_set_dfa_state_pair.set;
-            const cur_dfa_state = cur_set_dfa_state_pair.dfa_state;
-
-            scanline.clearRetainingCapacity();
-            for (cur_set) |state| {
-                for (0..nfa.states.items[state].transitions.len) |transition_i| {
-                    const transition = nfa.states.items[state].transitions.get(transition_i);
-                    try scanline.append(ScanlineEvent{
-                        .key = transition.range.start,
-                        .delta = 1,
-                        .dest_index = transition.dest_index,
-                    });
-                    try scanline.append(ScanlineEvent{
-                        .key = transition.range.end + 1,
-                        .delta = -1,
-                        .dest_index = transition.dest_index,
-                    });
-                }
-            }
-
-            std.mem.sort(ScanlineEvent, scanline.items, {}, ScanlineEvent.lessThan);
-
-            std.debug.assert(std.mem.allEqual(u32, nfa_state_count, 0));
-            if (scanline.items.len > 0) {
-                var prev_key = scanline.items[0].key;
-                var prev_prev_key = scanline.items[0].key;
-                for (scanline.items) |event| {
-                    defer {
-                        prev_key = event.key;
-                        prev_prev_key = prev_key;
-                    }
-
-                    if (event.key != prev_key) {
-                        nfa_states_set.clearRetainingCapacity();
-                        for (0.., nfa_state_count) |i, count| {
-                            if (count > 0) {
-                                try nfa_states_set.append(@intCast(i));
-                            }
-                        }
-
-                        const set_index = try set_list.mergeClosures(self, nfa, nfa_states_set.items);
-                        const dest_index = set_list.set_to_dfa_state.items[set_index].?;
-
-                        try self.addTransition(
-                            cur_dfa_state,
-                            .{
-                                .range = DFA.Transition.Range
-                                    .fromRange(prev_prev_key, prev_key),
-                                .dest_index = dest_index,
-                            },
-                        );
-                    }
-
-                    if (event.delta > 0) {
-                        nfa_state_count[event.dest_index] += 1;
-                    } else {
-                        nfa_state_count[event.dest_index] -= 1;
-                    }
-                }
-            }
-            std.debug.assert(std.mem.allEqual(u32, nfa_state_count, 0));
-        }
+        try self.mergeNfaStates(&set_list, cur_dfa_state, nfa, cur_set, &nfa_states_buffer);
     }
 
     for (0.., set_list.sets.items) |i, set| {
         for (nfa.accepting_states.items) |nfa_accepting_state| {
             if (std.mem.indexOfScalar(u32, set, nfa_accepting_state) != null) {
-                try self.markStateAccepting(@intCast(i));
+                const dfa_state = set_list.set_to_dfa_state.items[i].?;
+                try self.markStateAccepting(@intCast(dfa_state));
             }
         }
     }
@@ -162,6 +121,29 @@ pub fn minimizeDFA(self: *Self, original_dfa: DFA) std.mem.Allocator.Error!DFA {
     _ = original_dfa;
 
     return self.build();
+}
+
+fn mergeNfaStates(self: *Self, set_list: *StateSetList, cur_dfa_state: u32, nfa: NFA, cur_set: []const u32, nfa_states_buffer: *std.ArrayList(u32)) !void {
+    std.debug.assert(cur_set.len > 0);
+
+    for (std.math.minInt(u8)..std.math.maxInt(u8) + 1) |key| {
+        nfa_states_buffer.clearRetainingCapacity();
+        for (cur_set) |nfa_state_index| {
+            const cur_state = nfa.states.items[nfa_state_index];
+            const transitions_slice = cur_state.transitions.slice();
+            for (0..cur_state.transitions.len) |transition_index| {
+                const transition = transitions_slice.get(transition_index);
+                if (transition.range.matches(@intCast(key))) {
+                    if (std.mem.indexOfScalar(u32, nfa_states_buffer.items, transition.dest_index) == null) {
+                        try nfa_states_buffer.append(transition.dest_index);
+                    }
+                }
+            }
+        }
+        if (nfa_states_buffer.items.len > 0) {
+            try self.addTransition(cur_dfa_state, @intCast(key), try set_list.mergeClosures(self, nfa, nfa_states_buffer.items));
+        }
+    }
 }
 
 const StateSetList = struct {
@@ -193,17 +175,17 @@ const StateSetList = struct {
 
     pub fn getNextSet(self: *StateSetList) ?struct { set: []const u32, dfa_state: u32 } {
         const result_index = self.unvisited_states.popOrNull();
-        if (result_index == null) {
+        if (result_index) |index| {
+            return .{
+                .set = self.getSet(index),
+                .dfa_state = self.set_to_dfa_state.items[index].?,
+            };
+        } else {
             return null;
         }
-
-        return .{
-            .set = self.getSet(result_index.?),
-            .dfa_state = self.set_to_dfa_state.items[result_index.?].?,
-        };
     }
 
-    pub fn getOrInsertEpsilonClosure(self: *StateSetList, dfa_builder: *DfaBuilder, nfa: NFA, nfa_state: u32) !void {
+    pub fn ensureEpsilonClosureExists(self: *StateSetList, dfa_builder: *DfaBuilder, nfa: NFA, nfa_state: u32) !void {
         const closure = try getEpsilonClosure(self.allocator, nfa, nfa_state);
 
         const index = self.setLowerBound(closure);
@@ -212,6 +194,8 @@ const StateSetList = struct {
             self.allocator.free(closure);
             return;
         }
+
+        std.debug.assert(closure.len > 0);
 
         try self.sets.insert(self.allocator, index, closure);
         try self.unvisited_states.append(self.allocator, index);
@@ -223,15 +207,22 @@ const StateSetList = struct {
     }
 
     pub fn mergeClosures(self: *StateSetList, dfa_builder: *DfaBuilder, nfa: NFA, nfa_states: []const u32) !SetIndex {
+        std.debug.assert(nfa_states.len > 0);
+
         var merged_set = std.ArrayList(u32).init(self.allocator);
         defer merged_set.deinit();
 
         for (nfa_states) |i| {
             const closure = try getEpsilonClosure(self.allocator, nfa, i);
+            std.debug.assert(closure.len > 0);
+
             defer self.allocator.free(closure);
             try merged_set.appendSlice(closure);
         }
+        std.debug.assert(merged_set.items.len > 0);
+
         std.mem.sortUnstable(u32, merged_set.items, {}, std.sort.asc(u32));
+
         var i: usize = 1;
         while (i < merged_set.items.len) {
             if (merged_set.items[i - 1] == merged_set.items[i]) {
@@ -253,7 +244,7 @@ const StateSetList = struct {
         }
 
         std.debug.assert(index < self.set_to_dfa_state.items.len);
-        return index;
+        return self.set_to_dfa_state.items[index].?;
     }
 
     fn setLowerBound(self: StateSetList, set: []const u32) SetIndex {
@@ -354,19 +345,9 @@ pub fn markStateAccepting(self: *Self, i: u32) !void {
     }
 }
 
-pub fn addTransition(self: *Self, state: u32, transition: DFA.Transition) !void {
-    const state_transitions_ranges = self.result.states.items[state].transitions.items(.range);
-    const i = std.sort.lowerBound(
-        DFA.Transition.Range,
-        transition.range,
-        state_transitions_ranges,
-        {},
-        DFA.Transition.Range.lessThan,
-    );
-
-    if (i >= state_transitions_ranges.len or !state_transitions_ranges[i].eq(transition.range)) {
-        try self.result.states.items[state].transitions.insert(self.allocator, i, transition);
-    }
+pub fn addTransition(self: *Self, state: u32, key: u8, dest: u32) !void {
+    std.debug.assert(!self.result.states.items[state].transitions.contains(key));
+    try self.result.states.items[state].transitions.putNoClobber(self.allocator, key, dest);
 }
 
 fn resizeIfNeeded(bitset: *std.DynamicBitSetUnmanaged, allocator: std.mem.Allocator, n: u32) !void {
@@ -375,7 +356,7 @@ fn resizeIfNeeded(bitset: *std.DynamicBitSetUnmanaged, allocator: std.mem.Alloca
     }
 }
 
-test "basic" {
+test "basic NFA to DFA" {
     const NfaBuilder = @import("NfaBuilder.zig");
 
     const allocator = std.testing.allocator;
@@ -422,5 +403,51 @@ test "basic" {
     defer dfa.deinit(allocator);
 
     // dfa.debugPrint();
-    try std.testing.expect(dfa.match("01110100")); // TODO
+
+    try std.testing.expect(dfa.match("000"));
+    try std.testing.expect(dfa.match("100"));
+    try std.testing.expect(dfa.match("01110100"));
+    try std.testing.expect(dfa.match("1110100"));
+}
+
+test "NFA loop" {
+    const NfaBuilder = @import("NfaBuilder.zig");
+
+    const allocator = std.testing.allocator;
+    var nfa_builder = NfaBuilder.init(allocator);
+
+    for (0..3) |_| {
+        _ = try nfa_builder.addState(.{});
+    }
+
+    try nfa_builder.addTransition(0, NFA.Transition{
+        .range = NFA.Transition.Range.fromChar('a'),
+        .dest_index = 1,
+    });
+
+    try nfa_builder.addEpsTransition(1, 0);
+
+    try nfa_builder.addTransition(1, NFA.Transition{
+        .range = NFA.Transition.Range.fromChar('b'),
+        .dest_index = 2,
+    });
+
+    try nfa_builder.markStateAccepting(2);
+
+    var nfa = nfa_builder.build();
+    defer nfa.deinit(allocator);
+
+    var dfa_builder = DfaBuilder.init(allocator);
+    var dfa = try dfa_builder.buildFromNFA(nfa);
+    defer dfa.deinit(allocator);
+
+    // dfa.debugPrint();
+    try std.testing.expect(dfa.match("ab"));
+    try std.testing.expect(dfa.match("aab"));
+    try std.testing.expect(dfa.match("aaaab"));
+    try std.testing.expect(dfa.match("aaaaaaaaab"));
+    try std.testing.expect(!dfa.match(""));
+    try std.testing.expect(!dfa.match("aaaaaaaaaaaaaa"));
+    try std.testing.expect(!dfa.match("b"));
+    try std.testing.expect(!dfa.match("baa"));
 }
