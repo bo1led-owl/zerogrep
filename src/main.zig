@@ -51,7 +51,7 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitC
     var args = args_blk: {
         const stdin_is_tty = std.io.getStdIn().isTty();
         const stdout_is_tty = stdout_file.isTty();
-        var cli_result = try cli.Args.parse(gpa, arena, stdin_is_tty, stdout_is_tty);
+        var cli_result = try cli.Args.parse(gpa, arena, stdout_is_tty);
         defer cli_result.errors.deinit();
 
         if (cli_result.args.print_help) {
@@ -413,7 +413,7 @@ fn handleLine(stdout: anytype, filename: []const u8, line_number: u32, strategy:
             }
 
             if (should_print_line_number) {
-                try stdout.print("{s}{d}:{s} ", .{ cli.ANSI.Fg.Green, line_number, cli.ANSI.Reset });
+                try stdout.print("{s}{d: >4}:{s} ", .{ cli.ANSI.Fg.Green, line_number, cli.ANSI.Reset });
                 printed_line_number = true;
             }
         }

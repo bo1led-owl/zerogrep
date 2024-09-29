@@ -64,10 +64,10 @@ pub const Args = struct {
         }
     };
 
-    pub fn parse(gpa: std.mem.Allocator, arena: std.mem.Allocator, stdin_is_tty: bool, stdout_is_tty: bool) !Result {
+    pub fn parse(gpa: std.mem.Allocator, arena: std.mem.Allocator, stdout_is_tty: bool) !Result {
         var result = Result.init(gpa, arena);
 
-        if (stdin_is_tty or !stdout_is_tty) {
+        if (!stdout_is_tty) {
             result.args.data_only = true;
             result.args.pretty = false;
         }
