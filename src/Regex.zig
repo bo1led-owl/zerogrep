@@ -184,7 +184,10 @@ pub fn buildNFA(self: *Self, gpa: std.mem.Allocator, arena: std.mem.Allocator) !
     var errors = Errors(SourceSpan).init(gpa, arena);
     var builder = NfaBuilder.init(gpa);
 
-    errdefer builder.build().deinit(gpa);
+    errdefer {
+        var nfa = builder.build();
+        nfa.deinit(gpa);
+    }
 
     const cur_state = try builder.addState(.{});
     const res = try self.parse(gpa, &errors, &builder, cur_state, RegexCharacter.EOF);
