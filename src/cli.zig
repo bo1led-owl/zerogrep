@@ -71,7 +71,7 @@ pub const Args = struct {
             result.args.data_only = true;
             result.args.pretty = false;
         }
-        
+
         var iter = try std.process.argsWithAllocator(gpa);
         defer iter.deinit();
 

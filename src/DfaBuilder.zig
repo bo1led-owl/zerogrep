@@ -402,8 +402,6 @@ test "basic NFA to DFA" {
     var dfa = try dfa_builder.buildFromNFA(nfa);
     defer dfa.deinit(allocator);
 
-    // dfa.debugPrint();
-
     try std.testing.expect(dfa.match("000"));
     try std.testing.expect(dfa.match("100"));
     try std.testing.expect(dfa.match("01110100"));
@@ -441,7 +439,6 @@ test "NFA loop" {
     var dfa = try dfa_builder.buildFromNFA(nfa);
     defer dfa.deinit(allocator);
 
-    // dfa.debugPrint();
     try std.testing.expect(dfa.match("ab"));
     try std.testing.expect(dfa.match("aab"));
     try std.testing.expect(dfa.match("aaaab"));

@@ -59,7 +59,7 @@ const StackFrame = struct {
     cur_epsilon_transition: u32,
 };
 
-fn walk(self: Self, stack: *Stack, input: []const u8, at_line_start: bool) !bool {
+fn walk(self: Self, stack: *Stack, input: []const u8, at_line_start: bool) !?u32 {
     try stack.append(.{
         .state_index = 0,
         .char_index = 0,
@@ -82,13 +82,11 @@ fn walk(self: Self, stack: *Stack, input: []const u8, at_line_start: bool) !bool
         }
 
         if (std.mem.indexOfScalar(u32, self.accepting_states.items, frame.state_index) != null) {
-            return true;
+            return frame.char_index;
         }
 
         if (frame.cur_epsilon_transition < state.*.epsilon_transitions.items.len) {
             const dest = state.*.epsilon_transitions.items[frame.cur_epsilon_transition];
-
-            // std.debug.print("{d} eps -> {d}\n", .{ frame.state_index, dest });
 
             stack.items[stack.items.len - 1].cur_epsilon_transition += 1;
 
@@ -117,8 +115,6 @@ fn walk(self: Self, stack: *Stack, input: []const u8, at_line_start: bool) !bool
         const transition = state.*.transitions.get(frame.cur_transition);
         const cur_char = input[frame.char_index];
         if (transition.range.matches(cur_char)) {
-            // std.debug.print("{d} {c} -> {d}\n", .{ frame.state_index, cur_char, transition.dest_index });
-
             stack.items[stack.items.len - 1].cur_transition += 1;
 
             try stack.append(.{
@@ -135,10 +131,10 @@ fn walk(self: Self, stack: *Stack, input: []const u8, at_line_start: bool) !bool
         }
     }
 
-    return false;
+    return null;
 }
 
-pub fn match(self: Self, stack: *Stack, line: []const u8) !bool {
+pub fn match(self: Self, stack: *Stack, line: []const u8) !?struct { start: u32, end: u32 } {
     defer stack.clearRetainingCapacity();
 
     // var timer = try std.time.Timer.start();
@@ -151,15 +147,17 @@ pub fn match(self: Self, stack: *Stack, line: []const u8) !bool {
     // }
 
     for (0..line.len) |i| {
-        if (try self.walk(stack, line[i..], i == 0)) {
-            return true;
+        if (try self.walk(stack, line[i..], i == 0)) |char_index| {
+            return .{ .start = @intCast(i), .end = @intCast(i + char_index) };
         }
         stack.clearRetainingCapacity();
     } else {
-        return try self.walk(stack, "", true);
+        if (try self.walk(stack, "", true)) |char_index| {
+            return .{ .start = 0, .end = char_index + 1 };
+        }
     }
 
-    return false;
+    return null;
 }
 
 pub const Transition = struct {

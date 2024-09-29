@@ -306,10 +306,6 @@ fn parse(self: *Self, gpa: std.mem.Allocator, errors: *Errors(SourceSpan), build
                     continue;
                 }
 
-                // var last_state: u32 = undefined;
-                // for (prev_state..cur_state + 1) |state| {
-                //     last_state = try builder.addState(try nf.states.items[state].cloneWithoutAnchors(gpa));
-                // }
                 const last_state = try builder.cloneRange(prev_state, cur_state);
                 try builder.addEpsTransition(cur_state, last_state);
                 try builder.addEpsTransition(cur_state, cur_state + 1);
@@ -429,7 +425,6 @@ fn parseBracketExpr(self: *Self, gpa: std.mem.Allocator, errors: *Errors(SourceS
                     }
                     cur_range_start = null;
                 } else {
-                    // try sortedInsert(gpa, &char_set, literal_char);
                     try added_ranges.append(gpa, Range{ .start = literal_char, .end = literal_char });
                 }
             },
@@ -437,8 +432,6 @@ fn parseBracketExpr(self: *Self, gpa: std.mem.Allocator, errors: *Errors(SourceS
             else => unreachable,
         }
     }
-
-    // std.mem.sort(Range, added_ranges.items, {}, Range.lessThan);
 
     var charset = std.bit_set.ArrayBitSet(usize, 256).initEmpty();
     for (added_ranges.items) |r| {

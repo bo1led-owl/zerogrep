@@ -87,15 +87,8 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitC
         if (string_literal) |l| {
             break :strategy_blk SearchStrategy.initStringLiteral(l);
         } else {
-            // var timer = try std.time.Timer.start();
-
             var nfa_build_result = try regex.buildNFA(gpa, arena);
             defer nfa_build_result.errors.deinit();
-
-            // const nfa_build_time: f64 = @floatFromInt(timer.read());
-            // std.debug.print("NFA is built in {d:.3}us\n", .{
-            //     nfa_build_time / std.time.ns_per_us,
-            // });
 
             if (nfa_build_result.errors.count() != 0) {
                 for (nfa_build_result.errors.items()) |err| {
@@ -139,6 +132,7 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitC
                     .data_only = args.data_only,
                     .multiple_files = multiple_files,
                     .first_file = first_file,
+                    .pretty = args.pretty,
                 };
                 if (try handleFile(file, path, read_buffer, stdout, &strategy, flags)) {
                     first_file = true;
@@ -152,6 +146,7 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitC
             .data_only = args.data_only,
             .multiple_files = false,
             .first_file = true,
+            .pretty = args.pretty,
         };
         _ = try handleFile(stdin_file, "stdin", read_buffer, stdout, &strategy, flags);
     }
@@ -216,16 +211,23 @@ const SearchStrategy = union(enum) {
         }
     }
 
-    pub fn match(self: *SearchStrategy, line: []const u8) !bool {
+    pub fn match(self: *SearchStrategy, line: []const u8) !?struct { start: u32, end: u32 } {
         switch (self.*) {
             .StringLiteral => |l| {
-                return std.mem.indexOf(u8, line, l) != null;
+                if (std.mem.indexOf(u8, line, l)) |index| {
+                    return .{ .start = @intCast(index), .end = @intCast(index + l.len) };
+                } else return null;
             },
             .NFA => |*n| {
-                return n.*.nfa.match(&n.*.nfa_stack, line);
+                const match_result = try n.*.nfa.match(&n.*.nfa_stack, line);
+                if (match_result) |res| {
+                    return .{ .start = res.start, .end = res.end };
+                } else return null;
             },
             .DFA => |d| {
-                return d.dfa.match(line);
+                if (d.dfa.match(line)) |res| {
+                    return .{ .start = res.start, .end = res.end };
+                } else return null;
             },
         }
     }
@@ -251,6 +253,7 @@ pub fn checkRecursively(gpa: std.mem.Allocator, args: cli.Args, cwd: std.fs.Dir,
                     .data_only = args.data_only,
                     .multiple_files = true,
                     .first_file = first_file,
+                    .pretty = args.pretty,
                 };
                 if (try handleFile(file, path, read_buffer, stdout, strategy, flags)) {
                     first_file = false;
@@ -282,6 +285,7 @@ pub fn checkRecursively(gpa: std.mem.Allocator, args: cli.Args, cwd: std.fs.Dir,
                                 .data_only = args.data_only,
                                 .multiple_files = true,
                                 .first_file = first_file,
+                                .pretty = args.pretty,
                             };
 
                             if (try handleFile(file, entry.path, read_buffer, stdout, strategy, flags)) {
@@ -301,6 +305,7 @@ const HandleFileFlags = struct {
     data_only: bool,
     multiple_files: bool,
     first_file: bool,
+    pretty: bool,
 };
 
 fn LineReader(comptime ReaderType: type) type {
@@ -355,7 +360,6 @@ fn handleFile(file: std.fs.File, filename: []const u8, buffer: []u8, stdout: any
     var line_reader = lineReader(buffer, file.reader());
     try line_reader.preread();
 
-    // std.debug.print("{s}\n", .{filename});
     if (try isFileBinary(line_reader.cur())) {
         return false;
     }
@@ -364,7 +368,7 @@ fn handleFile(file: std.fs.File, filename: []const u8, buffer: []u8, stdout: any
     var printed = false;
 
     while (try line_reader.next()) |line| : (line_number += 1) {
-        if (try handleLine(stdout, filename, line_number, strategy, line, printed, flags)) {
+        if (try handleLine(stdout, filename, line_number, strategy, line, &printed, flags)) {
             printed = true;
         }
     }
@@ -372,30 +376,52 @@ fn handleFile(file: std.fs.File, filename: []const u8, buffer: []u8, stdout: any
     return printed;
 }
 
-fn handleLine(stdout: anytype, filename: []const u8, line_number: u32, strategy: *SearchStrategy, line: []const u8, printed: bool, flags: HandleFileFlags) !bool {
-    if (!try strategy.match(line)) {
-        return false;
-    }
-
-    if (!printed and !flags.data_only and flags.multiple_files and !flags.first_file) {
-        try stdout.writeByte('\n');
-    }
-
-    if (!flags.data_only) {
-        const should_print_filename = !flags.data_only and flags.multiple_files and !printed;
-        const should_print_line_number = !flags.data_only;
-
-        if (should_print_filename) {
-            try stdout.print("{s}{s}{s}\n", .{ cli.ANSI.Fg.Magenta, filename, cli.ANSI.Reset });
+fn handleLine(stdout: anytype, filename: []const u8, line_number: u32, strategy: *SearchStrategy, line: []const u8, printed: *bool, flags: HandleFileFlags) !bool {
+    if (!flags.pretty) {
+        const match_result = try strategy.match(line);
+        if (match_result) |_| {
+            try stdout.print("{s}\n", .{line});
         }
 
-        if (should_print_line_number) {
-            try stdout.print("{s}{d}:{s} ", .{ cli.ANSI.Fg.Green, line_number, cli.ANSI.Reset });
-        }
+        return match_result != null;
     }
 
-    try stdout.print("{s}\n", .{line});
-    return true;
+    var result = false;
+    var start: u32 = 0;
+    var printed_line_number = false;
+    while (try strategy.match(line[start..])) |match_result| {
+        result = true;
+
+        const slice_start = match_result.start + start;
+        const slice_end = match_result.end + start;
+
+        if (!printed.* and !flags.data_only and flags.multiple_files and !flags.first_file) {
+            try stdout.writeByte('\n');
+        }
+
+        if (!flags.data_only) {
+            const should_print_filename = !flags.data_only and flags.multiple_files and !printed.*;
+            const should_print_line_number = !flags.data_only and !printed_line_number;
+
+            if (should_print_filename) {
+                try stdout.print("{s}{s}{s}\n", .{ cli.ANSI.Fg.Magenta, filename, cli.ANSI.Reset });
+            }
+
+            if (should_print_line_number) {
+                try stdout.print("{s}{d}:{s} ", .{ cli.ANSI.Fg.Green, line_number, cli.ANSI.Reset });
+                printed_line_number = true;
+            }
+        }
+
+        try stdout.print("{s}{s}{s}{s}", .{ line[start..slice_start], cli.ANSI.Fg.Red, line[slice_start..slice_end], cli.ANSI.Reset });
+        start = slice_end;
+        printed.* = true;
+    }
+
+    if (result) {
+        try stdout.print("{s}\n", .{line[start..]});
+    }
+    return result;
 }
 
 fn isFileBinary(buf: []const u8) !bool {
