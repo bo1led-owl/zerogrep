@@ -3,6 +3,8 @@ const cli = @import("cli.zig");
 
 const Regex = @import("Regex.zig");
 const NFA = @import("NFA.zig");
+const DFA = @import("DFA.zig");
+const DfaBuilder = @import("DfaBuilder.zig");
 const Errors = @import("errors.zig").Errors;
 
 const KiB = 1024;
@@ -44,26 +46,22 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitC
     var bw_stdout = std.io.bufferedWriter(stdout_file.writer());
     const stdout = bw_stdout.writer();
 
-    var args: cli.Args = undefined;
-    defer args.deinit(gpa);
-
     var from_stdin = false;
 
-    {
+    var args = args_blk: {
         const stdin_is_tty = std.io.getStdIn().isTty();
         const stdout_is_tty = stdout_file.isTty();
         var cli_result = try cli.Args.parse(gpa, arena, stdin_is_tty, stdout_is_tty);
         defer cli_result.errors.deinit();
 
-        args = cli_result.args;
-
-        if (args.print_help) {
+        if (cli_result.args.print_help) {
             try cli.printHelp(stdout);
             try bw_stdout.flush();
+            cli_result.args.deinit(gpa);
             return ExitCode.Success;
         }
 
-        if (args.paths.len == 0) {
+        if (cli_result.args.paths.len == 0) {
             if (!stdin_is_tty) {
                 from_stdin = true;
             } else {
@@ -75,20 +73,22 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitC
             for (cli_result.errors.items()) |err| {
                 try stderr.print("Error: {s}\n", .{err.message});
             }
+            cli_result.args.deinit(gpa);
             return ExitCode.IncorrectUsage;
         }
-    }
 
-    // var timer = try std.time.Timer.start();
+        break :args_blk cli_result.args;
+    };
+    defer args.deinit(gpa);
 
-    var strategy: SearchStrategy = undefined;
-    defer strategy.deinit(gpa);
-    {
+    var strategy: SearchStrategy = strategy_blk: {
         var regex = Regex.init(args.pattern);
         const string_literal = try regex.toStringLiteral(gpa);
         if (string_literal) |l| {
-            strategy = SearchStrategy.initStringLiteral(l);
+            break :strategy_blk SearchStrategy.initStringLiteral(l);
         } else {
+            // var timer = try std.time.Timer.start();
+
             var nfa_build_result = try regex.buildNFA(gpa, arena);
             defer nfa_build_result.errors.deinit();
 
@@ -97,27 +97,23 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitC
             //     nfa_build_time / std.time.ns_per_us,
             // });
 
-            strategy = SearchStrategy.initRegex(gpa, nfa_build_result.automata);
             if (nfa_build_result.errors.count() != 0) {
                 for (nfa_build_result.errors.items()) |err| {
-                    try stderr.print("{s}\n", .{args.pattern});
-
-                    const span = err.payload;
-
-                    try stderr.writeByteNTimes(' ', span.start);
-                    try stderr.writeAll(cli.ANSI.Fg.Red ++ cli.ANSI.Bold);
-                    try stderr.writeByteNTimes('^', span.end - span.start + 1);
-                    try stderr.print(" {s}{s}\n", .{ err.message, cli.ANSI.Reset });
+                    try reportRegexError(stderr, args.pattern, err.payload, err.message);
                 }
+                nfa_build_result.automata.deinit(gpa);
                 return ExitCode.IncorrectUsage;
             }
+
+            // TODO: limit DFA size, roll back to NFA in critical situations
+            // break :strategy_blk SearchStrategy.initNFA(gpa, nfa_build_result.automata);
+
+            var dfa_builder = DfaBuilder.init(gpa);
+            const dfa = try dfa_builder.buildFromNFA(nfa_build_result.automata);
+            break :strategy_blk SearchStrategy.initDFA(dfa);
         }
-    }
-
-    // nfa.debugPrint();
-
-    // var read_buffer = try std.ArrayList(u8).initCapacity(gpa, 96 * KiB);
-    // defer read_buffer.deinit();
+    };
+    defer strategy.deinit(gpa);
 
     const read_buffer = try gpa.alloc(u8, 96 * KiB);
     defer gpa.free(read_buffer);
@@ -163,11 +159,23 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitC
     return code;
 }
 
+fn reportRegexError(stderr: anytype, pattern: []const u8, span: Regex.SourceSpan, message: []const u8) !void {
+    try stderr.print("{s}\n", .{pattern});
+
+    try stderr.writeByteNTimes(' ', span.start);
+    try stderr.writeAll(cli.ANSI.Fg.Red ++ cli.ANSI.Bold);
+    try stderr.writeByteNTimes('^', span.end - span.start + 1);
+    try stderr.print(" {s}{s}\n", .{ message, cli.ANSI.Reset });
+}
+
 const SearchStrategy = union(enum) {
     StringLiteral: []const u8,
-    Regex: struct {
+    NFA: struct {
         nfa: NFA,
         nfa_stack: NFA.Stack,
+    },
+    DFA: struct {
+        dfa: DFA,
     },
 
     pub fn initStringLiteral(lit: []const u8) SearchStrategy {
@@ -176,11 +184,19 @@ const SearchStrategy = union(enum) {
         };
     }
 
-    pub fn initRegex(gpa: std.mem.Allocator, nfa: NFA) SearchStrategy {
+    pub fn initNFA(gpa: std.mem.Allocator, nfa: NFA) SearchStrategy {
         return SearchStrategy{
-            .Regex = .{
+            .NFA = .{
                 .nfa = nfa,
                 .nfa_stack = NFA.Stack.init(gpa),
+            },
+        };
+    }
+
+    pub fn initDFA(dfa: DFA) SearchStrategy {
+        return SearchStrategy{
+            .DFA = .{
+                .dfa = dfa,
             },
         };
     }
@@ -190,9 +206,12 @@ const SearchStrategy = union(enum) {
             .StringLiteral => |l| {
                 gpa.free(l);
             },
-            .Regex => |*r| {
-                r.*.nfa.deinit(gpa);
-                r.*.nfa_stack.deinit();
+            .NFA => |*n| {
+                n.*.nfa.deinit(gpa);
+                n.*.nfa_stack.deinit();
+            },
+            .DFA => |*d| {
+                d.*.dfa.deinit(gpa);
             },
         }
     }
@@ -202,8 +221,11 @@ const SearchStrategy = union(enum) {
             .StringLiteral => |l| {
                 return std.mem.indexOf(u8, line, l) != null;
             },
-            .Regex => |*r| {
-                return r.*.nfa.match(&r.*.nfa_stack, line);
+            .NFA => |*n| {
+                return n.*.nfa.match(&n.*.nfa_stack, line);
+            },
+            .DFA => |d| {
+                return d.dfa.match(line);
             },
         }
     }

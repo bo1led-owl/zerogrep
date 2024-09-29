@@ -189,7 +189,7 @@ pub fn buildNFA(self: *Self, gpa: std.mem.Allocator, arena: std.mem.Allocator) !
     const cur_state = try builder.addState(.{});
     const res = try self.parse(gpa, &errors, &builder, cur_state, RegexCharacter.EOF);
 
-    builder.setAcceptingState(res.accepting_state);
+    try builder.markStateAccepting(res.accepting_state);
 
     return .{
         .automata = builder.build(),
