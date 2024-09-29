@@ -418,7 +418,7 @@ fn handleLine(stdout: anytype, filename: []const u8, line_number: u32, strategy:
             }
         }
 
-        try stdout.print("{s}{s}{s}{s}", .{ line[start..slice_start], cli.ANSI.Fg.Red, line[slice_start..slice_end], cli.ANSI.Reset });
+        try stdout.print("{s}{s}{s}{s}", .{ line[start..slice_start], cli.ANSI.Fg.Red ++ cli.ANSI.Bold, line[slice_start..slice_end], cli.ANSI.Reset });
         start = slice_end;
         printed.* = true;
     }
