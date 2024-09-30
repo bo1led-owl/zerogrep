@@ -1,5 +1,6 @@
 const std = @import("std");
 const Self = @This();
+const Builder = @import("DfaBuilder.zig");
 
 states: std.ArrayListUnmanaged(State) = .{},
 initial_state: u32 = 0,
@@ -130,4 +131,106 @@ fn order(comptime T: type) fn (void, T, T) std.math.Order {
 
 fn getTransition(self: Self, from: u32, key: u8) ?u32 {
     return self.states.items[from].transitions.get(key);
+}
+
+test "basic" {
+    //      a        b
+    // (0) ---> (1) ---> ((2))
+    //
+
+    const allocator = std.testing.allocator;
+    var builder = Builder.init(allocator);
+
+    for (0..3) |_| {
+        _ = try builder.addState(.{});
+    }
+
+    try builder.markStateAccepting(2);
+
+    try builder.addTransition(0, 'a', 1);
+    try builder.addTransition(1, 'b', 2);
+
+    var dfa = builder.build();
+    defer dfa.deinit(allocator);
+
+    try std.testing.expect((dfa.match(true, "ab") != null));
+    try std.testing.expect((dfa.match(true, "cab") != null));
+    try std.testing.expect((dfa.match(true, "abc") != null));
+    try std.testing.expect(!(dfa.match(true, "a") != null));
+    try std.testing.expect(!(dfa.match(true, "b") != null));
+    try std.testing.expect(!(dfa.match(true, "") != null));
+    try std.testing.expect(!(dfa.match(true, "ac") != null));
+}
+
+test "branching" {
+    //      a
+    //    ----> (1) --\
+    //  /              \ a
+    //  |   b        b  \
+    // (0) ---> (2) -----> ((4))
+    //  |               /
+    //  \   c          / c
+    //   -----> (3) --/
+
+    const allocator = std.testing.allocator;
+    var builder = Builder.init(allocator);
+
+    for (0..5) |_| {
+        _ = try builder.addState(.{});
+    }
+    try builder.markStateAccepting(4);
+
+    try builder.addTransition(0, 'a', 1);
+    try builder.addTransition(0, 'b', 2);
+    try builder.addTransition(0, 'c', 3);
+
+    try builder.addTransition(1, 'a', 4);
+    try builder.addTransition(2, 'b', 4);
+    try builder.addTransition(3, 'c', 4);
+
+    var dfa = builder.build();
+    defer dfa.deinit(allocator);
+
+    try std.testing.expect((dfa.match(true, "aa") != null));
+    try std.testing.expect((dfa.match(true, "aab") != null));
+    try std.testing.expect((dfa.match(true, "bb") != null));
+    try std.testing.expect((dfa.match(true, "cc") != null));
+    try std.testing.expect(!(dfa.match(true, "") != null));
+    try std.testing.expect(!(dfa.match(true, "a") != null));
+    try std.testing.expect(!(dfa.match(true, "ab") != null));
+    try std.testing.expect(!(dfa.match(true, "cb") != null));
+    try std.testing.expect(!(dfa.match(true, "cf") != null));
+    try std.testing.expect(!(dfa.match(true, "b") != null));
+    try std.testing.expect(!(dfa.match(true, "c") != null));
+    try std.testing.expect(!(dfa.match(true, "d") != null));
+    try std.testing.expect(!(dfa.match(true, "foo") != null));
+}
+
+test "loop" {
+    //       b
+    //  (0) ---> ((1))
+    //   ^
+    //  / \ a
+    //  \/
+
+    const allocator = std.testing.allocator;
+    var builder = Builder.init(allocator);
+
+    for (0..2) |_| {
+        _ = try builder.addState(.{});
+    }
+    try builder.markStateAccepting(1);
+
+    try builder.addTransition(0, 'a', 0);
+    try builder.addTransition(0, 'b', 1);
+
+    var dfa = builder.build();
+    defer dfa.deinit(allocator);
+
+    try std.testing.expect(!(dfa.match(true, "") != null));
+    try std.testing.expect((dfa.match(true, "ab") != null));
+    try std.testing.expect((dfa.match(true, "aab") != null));
+    try std.testing.expect((dfa.match(true, "b") != null));
+    try std.testing.expect(!(dfa.match(true, "foo") != null));
+    try std.testing.expect(!(dfa.match(true, "a") != null));
 }

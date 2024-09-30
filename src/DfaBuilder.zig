@@ -12,11 +12,11 @@ result: DFA,
 pub fn init(allocator: std.mem.Allocator) Self {
     return .{
         .allocator = allocator,
-        .result = undefined,
+        .result = .{},
     };
 }
 
-fn build(self: *Self) DFA {
+pub fn build(self: *Self) DFA {
     defer self.result = undefined;
     return self.result;
 }
@@ -350,10 +350,10 @@ test "basic NFA to DFA" {
     var dfa = try dfa_builder.buildFromNFA(nfa);
     defer dfa.deinit(allocator);
 
-    try std.testing.expect(dfa.match("000") != null);
-    try std.testing.expect(dfa.match("100") != null);
-    try std.testing.expect(dfa.match("01110100") != null);
-    try std.testing.expect(dfa.match("1110100") != null);
+    try std.testing.expect(dfa.match(true, "000") != null);
+    try std.testing.expect(dfa.match(true, "100") != null);
+    try std.testing.expect(dfa.match(true, "01110100") != null);
+    try std.testing.expect(dfa.match(true, "1110100") != null);
 }
 
 test "NFA loop" {
@@ -387,12 +387,12 @@ test "NFA loop" {
     var dfa = try dfa_builder.buildFromNFA(nfa);
     defer dfa.deinit(allocator);
 
-    try std.testing.expect(dfa.match("ab") != null);
-    try std.testing.expect(dfa.match("aab") != null);
-    try std.testing.expect(dfa.match("aaaab") != null);
-    try std.testing.expect(dfa.match("aaaaaaaaab") != null);
-    try std.testing.expect(!(dfa.match("") != null));
-    try std.testing.expect(!(dfa.match("aaaaaaaaaaaaaa") != null));
-    try std.testing.expect(!(dfa.match("b") != null));
-    try std.testing.expect(!(dfa.match("baa") != null));
+    try std.testing.expect(dfa.match(true, "ab") != null);
+    try std.testing.expect(dfa.match(true, "aab") != null);
+    try std.testing.expect(dfa.match(true, "aaaab") != null);
+    try std.testing.expect(dfa.match(true, "aaaaaaaaab") != null);
+    try std.testing.expect(!(dfa.match(true, "") != null));
+    try std.testing.expect(!(dfa.match(true, "aaaaaaaaaaaaaa") != null));
+    try std.testing.expect(!(dfa.match(true, "b") != null));
+    try std.testing.expect(!(dfa.match(true, "baa") != null));
 }
