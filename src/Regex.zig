@@ -63,7 +63,7 @@ const Lexer = struct {
             };
         } else {
             return switch (cur_char.?) {
-                '(', ')', '|', '*', '+', '?', '^', '$', '[', ']' => |c| RegexCharacter{ .Literal = c },
+                '(', ')', '|', '*', '+', '?', '^', '$', '[', ']', '.' => |c| RegexCharacter{ .Literal = c },
                 else => CharError.UnknownEscapeSequence,
             };
         }

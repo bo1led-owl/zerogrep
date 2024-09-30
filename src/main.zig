@@ -51,7 +51,7 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitC
     var args = args_blk: {
         const stdin_is_tty = std.io.getStdIn().isTty();
         const stdout_is_tty = stdout_file.isTty();
-        var cli_result = try cli.Args.parse(gpa, arena, stdout_is_tty);
+        var cli_result = try cli.Args.parse(gpa, arena, stdin_is_tty, stdout_is_tty);
         defer cli_result.errors.deinit();
 
         if (cli_result.args.print_help) {
@@ -61,20 +61,16 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitC
             return ExitCode.Success;
         }
 
-        if (cli_result.args.paths.len == 0) {
-            if (!stdin_is_tty) {
-                from_stdin = true;
-            } else {
-                try cli_result.errors.addError("No input provided", .{}, {});
-            }
-        }
-
         if (cli_result.errors.count() != 0) {
             for (cli_result.errors.items()) |err| {
                 try stderr.print("Error: {s}\n", .{err.message});
             }
             cli_result.args.deinit(gpa);
             return ExitCode.IncorrectUsage;
+        }
+
+        if (cli_result.args.paths.len == 0 and !stdin_is_tty) {
+            from_stdin = true;
         }
 
         break :args_blk cli_result.args;
@@ -86,65 +82,39 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitC
         const string_literal = try regex.toStringLiteral(gpa);
         if (string_literal) |l| {
             break :strategy_blk SearchStrategy.initStringLiteral(l);
-        } else {
-            var nfa_build_result = try regex.buildNFA(gpa, arena);
-            defer nfa_build_result.errors.deinit();
-
-            if (nfa_build_result.errors.count() != 0) {
-                for (nfa_build_result.errors.items()) |err| {
-                    try reportRegexError(stderr, args.pattern, err.payload, err.message);
-                }
-                nfa_build_result.automata.deinit(gpa);
-                return ExitCode.IncorrectUsage;
-            }
-
-            // TODO: limit DFA size, roll back to NFA in critical situations
-            // break :strategy_blk SearchStrategy.initNFA(gpa, nfa_build_result.automata);
-
-            var dfa_builder = DfaBuilder.init(gpa);
-            const dfa = try dfa_builder.buildFromNFA(nfa_build_result.automata);
-            break :strategy_blk SearchStrategy.initDFA(dfa);
         }
+
+        var nfa_build_result = try regex.buildNFA(gpa, arena);
+        defer nfa_build_result.errors.deinit();
+
+        if (nfa_build_result.errors.count() != 0) {
+            for (nfa_build_result.errors.items()) |err| {
+                try reportRegexError(stderr, args.pattern, err.payload, err.message);
+            }
+            nfa_build_result.automata.deinit(gpa);
+            return ExitCode.IncorrectUsage;
+        }
+
+        // TODO: limit DFA size, roll back to NFA in critical situations
+        // break :strategy_blk SearchStrategy.initNFA(gpa, nfa_build_result.automata);
+
+        var dfa_builder = DfaBuilder.init(gpa);
+        const dfa = try dfa_builder.buildFromNFA(nfa_build_result.automata);
+        break :strategy_blk SearchStrategy.initDFA(dfa);
     };
     defer strategy.deinit(gpa);
 
     const read_buffer = try gpa.alloc(u8, 96 * KiB);
     defer gpa.free(read_buffer);
 
-    var code = ExitCode.Success;
+    var exit_code = ExitCode.Success;
     if (!from_stdin) {
         const cwd = std.fs.cwd();
-
-        if (args.recursive) {
-            try checkRecursively(gpa, args, cwd, stdout, stderr, read_buffer, &strategy);
-        } else {
-            const multiple_files = args.paths.len > 1;
-            var first_file = true;
-            for (args.paths) |path| {
-                const file = cwd.openFile(path, .{}) catch |e| {
-                    try stderr.print("Error opening `{s}`: {s}\n", .{ path, @errorName(e) });
-                    code = ExitCode.GenericError;
-                    continue;
-                };
-                defer file.close();
-
-                const flags = HandleFileFlags{
-                    .data_only = args.data_only,
-                    .multiple_files = multiple_files,
-                    .first_file = first_file,
-                    .print_line_numbers = args.pretty,
-                    .pretty = args.pretty,
-                };
-                if (try handleFile(file, path, read_buffer, stdout, &strategy, flags)) {
-                    first_file = true;
-                }
-            }
-        }
+        exit_code = try checkRecursively(gpa, args, cwd, stdout, stderr, read_buffer, &strategy);
     } else {
         const stdin_file = std.io.getStdIn();
 
         const flags = HandleFileFlags{
-            .data_only = args.data_only,
             .multiple_files = false,
             .first_file = true,
             .print_line_numbers = false,
@@ -152,8 +122,9 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitC
         };
         _ = try handleFile(stdin_file, "stdin", read_buffer, stdout, &strategy, flags);
     }
+
     try bw_stdout.flush();
-    return code;
+    return exit_code;
 }
 
 fn reportRegexError(stderr: anytype, pattern: []const u8, span: Regex.SourceSpan, message: []const u8) !void {
@@ -213,7 +184,7 @@ const SearchStrategy = union(enum) {
         }
     }
 
-    pub fn match(self: *SearchStrategy, line: []const u8) !?struct { start: u32, end: u32 } {
+    pub fn match(self: *SearchStrategy, lazy: bool, line: []const u8) !?struct { start: u32, end: u32 } {
         switch (self.*) {
             .StringLiteral => |l| {
                 if (std.mem.indexOf(u8, line, l)) |index| {
@@ -227,7 +198,7 @@ const SearchStrategy = union(enum) {
                 } else return null;
             },
             .DFA => |d| {
-                if (d.dfa.match(line)) |res| {
+                if (d.dfa.match(lazy, line)) |res| {
                     return .{ .start = res.start, .end = res.end };
                 } else return null;
             },
@@ -235,78 +206,92 @@ const SearchStrategy = union(enum) {
     }
 };
 
-pub fn checkRecursively(gpa: std.mem.Allocator, args: cli.Args, cwd: std.fs.Dir, stdout: anytype, stderr: anytype, read_buffer: []u8, strategy: *SearchStrategy) !void {
-    var first_file = true;
-    for (args.paths) |path| {
-        const filestat = cwd.statFile(path) catch |e| {
-            try stderr.print("Error trying to stat `{s}`: {s}\n", .{ path, @errorName(e) });
-            continue;
-        };
+pub fn checkRecursively(gpa: std.mem.Allocator, args: cli.Args, cwd: std.fs.Dir, stdout: anytype, stderr: anytype, read_buffer: []u8, strategy: *SearchStrategy) !ExitCode {
+    var flags = HandleFileFlags{
+        .multiple_files = true,
+        .first_file = true,
+        .print_line_numbers = args.pretty,
+        .pretty = args.pretty,
+    };
 
-        switch (filestat.kind) {
+    for (args.paths) |path| {
+        const exit_code = try handlePath(gpa, path, stdout, stderr, cwd, read_buffer, strategy, &flags);
+        if (exit_code != ExitCode.Success) {
+            return exit_code;
+        }
+    }
+
+    return ExitCode.Success;
+}
+
+fn handlePath(gpa: std.mem.Allocator, path: []const u8, stdout: anytype, stderr: anytype, cwd: std.fs.Dir, read_buffer: []u8, strategy: *SearchStrategy, flags: *HandleFileFlags) !ExitCode {
+    const filestat = cwd.statFile(path) catch |e| {
+        try stderr.print("Error trying to stat `{s}`: {s}\n", .{ path, @errorName(e) });
+        return ExitCode.GenericError;
+    };
+
+    switch (filestat.kind) {
+        .file => {
+            const file = cwd.openFile(path, .{}) catch |e| {
+                try stderr.print("Error opening `{s}`: {s}\n", .{ path, @errorName(e) });
+                return ExitCode.GenericError;
+            };
+            defer file.close();
+
+            const result = try handleFile(file, path, read_buffer, stdout, strategy, flags.*);
+            if (result) {
+                flags.*.first_file = false;
+            }
+        },
+        .directory => {
+            var dir = cwd.openDir(path, .{
+                .iterate = true,
+            }) catch |e| {
+                try stderr.print("Error opening `{s}`: {s}\n", .{ path, @errorName(e) });
+                return ExitCode.GenericError;
+            };
+
+            defer if (cwd.fd != dir.fd) {
+                dir.close();
+            };
+
+            var walker = try dir.walk(gpa);
+            defer walker.deinit();
+
+            const exit_code = try iterateOverDirectory(dir, &walker, stdout, stderr, strategy, read_buffer, flags);
+            if (exit_code != ExitCode.Success) {
+                return exit_code;
+            }
+        },
+        else => {},
+    }
+
+    return ExitCode.Success;
+}
+
+fn iterateOverDirectory(dir: std.fs.Dir, walker: *std.fs.Dir.Walker, stdout: anytype, stderr: anytype, strategy: *SearchStrategy, read_buffer: []u8, flags: *HandleFileFlags) !ExitCode {
+    while (try walker.next()) |entry| {
+        switch (entry.kind) {
             .file => {
-                const file = cwd.openFile(path, .{}) catch |e| {
-                    try stderr.print("Error opening `{s}`: {s}\n", .{ path, @errorName(e) });
-                    continue;
+                const file = dir.openFile(entry.path, .{}) catch |e| {
+                    try stderr.print("Error opening `{s}`: {s}\n", .{ entry.path, @errorName(e) });
+                    return ExitCode.GenericError;
                 };
                 defer file.close();
 
-                const flags = HandleFileFlags{
-                    .data_only = args.data_only,
-                    .multiple_files = true,
-                    .first_file = first_file,
-                    .print_line_numbers = args.pretty,
-                    .pretty = args.pretty,
-                };
-                if (try handleFile(file, path, read_buffer, stdout, strategy, flags)) {
-                    first_file = false;
-                }
-            },
-            .directory => {
-                var dir = cwd.openDir(path, .{
-                    .iterate = true,
-                }) catch |e| {
-                    try stderr.print("Error opening `{s}`: {s}\n", .{ path, @errorName(e) });
-                    continue;
-                };
-                defer if (cwd.fd != dir.fd) {
-                    dir.close();
-                };
-
-                var iter = try dir.walk(gpa);
-                defer iter.deinit();
-                while (try iter.next()) |entry| {
-                    switch (entry.kind) {
-                        .file => {
-                            const file = entry.dir.openFile(entry.basename, .{}) catch |e| {
-                                try stderr.print("Error opening `{s}`: {s}\n", .{ entry.path, @errorName(e) });
-                                continue;
-                            };
-                            defer file.close();
-
-                            const flags = HandleFileFlags{
-                                .data_only = args.data_only,
-                                .multiple_files = true,
-                                .first_file = first_file,
-                                .print_line_numbers = args.pretty,
-                                .pretty = args.pretty,
-                            };
-
-                            if (try handleFile(file, entry.path, read_buffer, stdout, strategy, flags)) {
-                                first_file = false;
-                            }
-                        },
-                        else => {},
-                    }
+                const result = try handleFile(file, entry.path, read_buffer, stdout, strategy, flags.*);
+                if (result) {
+                    flags.*.first_file = false;
                 }
             },
             else => {},
         }
     }
+
+    return ExitCode.Success;
 }
 
 const HandleFileFlags = struct {
-    data_only: bool,
     multiple_files: bool,
     first_file: bool,
     print_line_numbers: bool,
@@ -361,11 +346,11 @@ fn lineReader(buffer: []u8, reader: anytype) LineReader(@TypeOf(reader)) {
     };
 }
 
-fn handleFile(file: std.fs.File, filename: []const u8, buffer: []u8, stdout: anytype, strategy: *SearchStrategy, flags: HandleFileFlags) !bool {
+fn handleFile(file: std.fs.File, path: []const u8, buffer: []u8, stdout: anytype, strategy: *SearchStrategy, flags: HandleFileFlags) !bool {
     var line_reader = lineReader(buffer, file.reader());
     try line_reader.preread();
 
-    if (try isFileBinary(line_reader.cur())) {
+    if (isFileBinary(line_reader.cur())) {
         return false;
     }
 
@@ -373,7 +358,7 @@ fn handleFile(file: std.fs.File, filename: []const u8, buffer: []u8, stdout: any
     var printed = false;
 
     while (try line_reader.next()) |line| : (line_number += 1) {
-        if (try handleLine(stdout, filename, line_number, strategy, line, &printed, flags)) {
+        if (try handleLine(stdout, path, line_number, strategy, line, &printed, flags)) {
             printed = true;
         }
     }
@@ -383,7 +368,7 @@ fn handleFile(file: std.fs.File, filename: []const u8, buffer: []u8, stdout: any
 
 fn handleLine(stdout: anytype, filename: []const u8, line_number: u32, strategy: *SearchStrategy, line: []const u8, printed: *bool, flags: HandleFileFlags) !bool {
     if (!flags.pretty) {
-        const match_result = try strategy.match(line);
+        const match_result = try strategy.match(true, line);
         if (match_result) |_| {
             try stdout.print("{s}\n", .{line});
         }
@@ -394,28 +379,26 @@ fn handleLine(stdout: anytype, filename: []const u8, line_number: u32, strategy:
     var result = false;
     var start: u32 = 0;
     var printed_line_number = false;
-    while (try strategy.match(line[start..])) |match_result| {
+    while (try strategy.match(true, line[start..])) |match_result| {
         result = true;
 
         const slice_start = match_result.start + start;
         const slice_end = match_result.end + start;
 
-        if (!printed.* and !flags.data_only and flags.multiple_files and !flags.first_file) {
+        if (!printed.* and flags.multiple_files and !flags.first_file) {
             try stdout.writeByte('\n');
         }
 
-        if (!flags.data_only) {
-            const should_print_filename = !flags.data_only and flags.multiple_files and !printed.*;
-            const should_print_line_number = flags.print_line_numbers and !flags.data_only and !printed_line_number;
+        const should_print_filename = flags.multiple_files and !printed.*;
+        const should_print_line_number = flags.print_line_numbers and !printed_line_number;
 
-            if (should_print_filename) {
-                try stdout.print("{s}{s}{s}\n", .{ cli.ANSI.Fg.Magenta, filename, cli.ANSI.Reset });
-            }
+        if (should_print_filename) {
+            try stdout.print("{s}{s}{s}\n", .{ cli.ANSI.Fg.Magenta, filename, cli.ANSI.Reset });
+        }
 
-            if (should_print_line_number) {
-                try stdout.print("{s}{d: >4}:{s} ", .{ cli.ANSI.Fg.Green, line_number, cli.ANSI.Reset });
-                printed_line_number = true;
-            }
+        if (should_print_line_number) {
+            try stdout.print("{s}{d: >4}:{s} ", .{ cli.ANSI.Fg.Green, line_number, cli.ANSI.Reset });
+            printed_line_number = true;
         }
 
         try stdout.print("{s}{s}{s}{s}", .{ line[start..slice_start], cli.ANSI.Fg.Red ++ cli.ANSI.Bold, line[slice_start..slice_end], cli.ANSI.Reset });
@@ -429,7 +412,7 @@ fn handleLine(stdout: anytype, filename: []const u8, line_number: u32, strategy:
     return result;
 }
 
-fn isFileBinary(buf: []const u8) !bool {
+fn isFileBinary(buf: []const u8) bool {
     var printable: usize = 0;
     var zeros: usize = 0;
 

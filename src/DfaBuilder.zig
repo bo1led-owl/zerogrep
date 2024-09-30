@@ -21,62 +21,9 @@ fn build(self: *Self) DFA {
     return self.result;
 }
 
-const SetToStateMapCtx = struct {
-    pub fn hash(ctx: SetToStateMapCtx, key: []const u32) u64 {
-        _ = ctx;
-        var hasher = std.hash.Wyhash.init(0);
-        std.hash.autoHashStrat(&hasher, key, std.hash.Strategy.Deep);
-        return hasher.final();
-    }
-
-    pub fn eql(ctx: SetToStateMapCtx, lhs: []const u32, rhs: []const u32) bool {
-        _ = ctx;
-        return std.mem.eql(u32, lhs, rhs);
-    }
-};
-
-const SetToStateMap = std.HashMap(
-    []const u32,
-    u32,
-    SetToStateMapCtx,
-    std.hash_map.default_max_load_percentage,
-);
-
-const ScanlineEvent = struct {
-    key: u8,
-    delta: i8,
-    dest_index: u32,
-
-    pub fn cmp(ctx: void, lhs: ScanlineEvent, rhs: ScanlineEvent) bool {
-        _ = ctx;
-        if (lhs.key != rhs.key) {
-            return lhs.key < rhs.key;
-        }
-        return lhs.delta > rhs.delta;
-    }
-};
-
-const Scanline = std.ArrayList(ScanlineEvent);
-
-fn populateScanline(scanline: *Scanline, cur_set: []const u32, nfa_states: []const NFA.State) !void {
-    scanline.clearRetainingCapacity();
-    for (cur_set) |state| {
-        for (0..nfa_states[state].transitions.len) |transition_i| {
-            const transition = nfa_states[state].transitions.get(transition_i);
-            try scanline.append(ScanlineEvent{
-                .key = transition.range.start,
-                .delta = 1,
-                .dest_index = transition.dest_index,
-            });
-            try scanline.append(ScanlineEvent{
-                .key = transition.range.end,
-                .delta = -1,
-                .dest_index = transition.dest_index,
-            });
-        }
-    }
-
-    std.mem.sort(ScanlineEvent, scanline.items, {}, ScanlineEvent.cmp);
+fn orderU32(context: void, key: u32, item: u32) std.math.Order {
+    _ = context;
+    return std.math.order(key, item);
 }
 
 /// https://en.wikipedia.org/wiki/Powerset_construction
@@ -89,9 +36,6 @@ pub fn buildFromNFA(self: *Self, nfa: NFA) std.mem.Allocator.Error!DFA {
 
     try set_list.ensureEpsilonClosureExists(self, nfa, 0);
 
-    var scanline = Scanline.init(self.allocator);
-    defer scanline.deinit();
-
     var nfa_states_buffer = std.ArrayList(u32).init(self.allocator);
     defer nfa_states_buffer.deinit();
 
@@ -103,13 +47,17 @@ pub fn buildFromNFA(self: *Self, nfa: NFA) std.mem.Allocator.Error!DFA {
     }
 
     for (0.., set_list.sets.items) |i, set| {
+        const dfa_state = set_list.set_to_dfa_state.items[i].?;
         for (nfa.accepting_states.items) |nfa_accepting_state| {
-            if (std.mem.indexOfScalar(u32, set, nfa_accepting_state) != null) {
-                const dfa_state = set_list.set_to_dfa_state.items[i].?;
+            std.debug.assert(std.sort.isSorted(u32, set, {}, std.sort.asc(u32)));
+
+            if (std.sort.binarySearch(u32, nfa_accepting_state, set, {}, orderU32) != null) {
                 try self.markStateAccepting(@intCast(dfa_state));
+                break;
             }
         }
     }
+
     return self.build();
 }
 

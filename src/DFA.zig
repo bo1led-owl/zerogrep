@@ -38,13 +38,13 @@ pub fn debugPrint(self: Self) void {
     }
 }
 
-pub fn match(self: Self, line: []const u8) ?struct { start: u32, end: u32 } {
+pub fn match(self: Self, lazy: bool, line: []const u8) ?struct { start: u32, end: u32 } {
     for (0..line.len) |i| {
-        if (self.walk(line[i..], i == 0)) |char_index| {
+        if (self.walk(lazy, line[i..], i == 0)) |char_index| {
             return .{ .start = @intCast(i), .end = @intCast(i + char_index) };
         }
     } else {
-        if (self.walk("", true)) |char_index| {
+        if (self.walk(lazy, "", true)) |char_index| {
             return .{ .start = 0, .end = @intCast(char_index + 1) };
         }
     }
@@ -52,19 +52,25 @@ pub fn match(self: Self, line: []const u8) ?struct { start: u32, end: u32 } {
     return null;
 }
 
-fn walk(self: Self, input: []const u8, at_line_start: bool) ?u32 {
+fn walk(self: Self, lazy: bool, input: []const u8, at_line_start: bool) ?u32 {
+    var result: ?u32 = null;
+
     var cur_state = self.initial_state;
     for (0..input.len + 1) |i| {
         if (self.isStateAtLineStart(cur_state) and (!at_line_start or i != 0)) {
-            return null;
+            break;
         }
 
         if (self.isStateAtLineEnd(cur_state) and i < input.len) {
-            return null;
+            break;
         }
 
         if (self.isStateAccepting(cur_state)) {
-            return @intCast(i);
+            if (lazy) {
+                return @intCast(i);
+            }
+
+            result = @intCast(i);
         }
 
         if (i >= input.len) {
@@ -76,11 +82,11 @@ fn walk(self: Self, input: []const u8, at_line_start: bool) ?u32 {
         if (dest_opt) |dest| {
             cur_state = dest;
         } else {
-            return null;
+            break;
         }
     }
 
-    return null;
+    return result;
 }
 
 fn isStateAtLineStart(self: Self, state: u32) bool {
