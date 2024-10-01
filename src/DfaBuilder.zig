@@ -136,20 +136,20 @@ const StateSetList = struct {
     pub fn ensureEpsilonClosureExists(self: *StateSetList, dfa_builder: *DfaBuilder, nfa: NFA, nfa_state: u32) !void {
         const closure = try getEpsilonClosure(self.allocator, nfa, nfa_state);
 
-        const index = self.setLowerBound(closure);
-        const set_is_present = index < self.sets.items.len and std.mem.eql(u32, closure, self.sets.items[index]);
-        if (set_is_present) {
+        var index = self.findSet(closure);
+        if (index != null) {
             self.allocator.free(closure);
             return;
         }
 
         std.debug.assert(closure.len > 0);
 
-        try self.sets.insert(self.allocator, index, closure);
-        try self.unvisited_states.append(self.allocator, index);
+        index = self.sets.items.len;
+        try self.sets.insert(self.allocator, index.?, closure);
+        try self.unvisited_states.append(self.allocator, @intCast(index.?));
         try self.set_to_dfa_state.insert(
             self.allocator,
-            index,
+            index.?,
             try dfa_builder.addState(.{}),
         );
     }
@@ -180,31 +180,30 @@ const StateSetList = struct {
             }
         }
 
-        const index = self.setLowerBound(merged_set.items);
-        if (index >= self.sets.items.len or !std.mem.eql(u32, merged_set.items, self.sets.items[index])) {
-            try self.sets.insert(self.allocator, index, try merged_set.toOwnedSlice());
-            try self.unvisited_states.append(self.allocator, index);
+        var index = self.findSet(merged_set.items);
+        if (index == null) {
+            index = self.sets.items.len;
+
+            try self.sets.append(self.allocator, try merged_set.toOwnedSlice());
+            try self.unvisited_states.append(self.allocator, @intCast(index.?));
             try self.set_to_dfa_state.insert(
                 self.allocator,
-                index,
+                index.?,
                 try dfa_builder.addState(.{}),
             );
         }
 
-        std.debug.assert(index < self.set_to_dfa_state.items.len);
-        return self.set_to_dfa_state.items[index].?;
+        std.debug.assert(index.? < self.set_to_dfa_state.items.len);
+        return self.set_to_dfa_state.items[index.?].?;
     }
 
-    fn setLowerBound(self: StateSetList, set: []const u32) SetIndex {
-        std.debug.assert(std.sort.isSorted([]const u32, self.sets.items, {}, ascSliceU32));
-        std.debug.assert(std.sort.isSorted(u32, set, {}, std.sort.asc(u32)));
-        return @intCast(std.sort.lowerBound(
-            []const u32,
-            set,
-            self.sets.items,
-            {},
-            ascSliceU32,
-        ));
+    fn findSet(self: StateSetList, needle: []const u32) ?usize {
+        for (0.., self.sets.items) |i, set| {
+            if (std.mem.eql(u32, set, needle)) {
+                return i;
+            }
+        }
+        return null;
     }
 
     fn getEpsilonClosure(allocator: std.mem.Allocator, nfa: NFA, state: u32) ![]const u32 {
@@ -294,7 +293,6 @@ pub fn markStateAccepting(self: *Self, i: u32) !void {
 }
 
 pub fn addTransition(self: *Self, state: u32, key: u8, dest: u32) !void {
-    std.debug.assert(!self.result.states.items[state].transitions.contains(key));
     try self.result.states.items[state].transitions.putNoClobber(self.allocator, key, dest);
 }
 
