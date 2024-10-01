@@ -49,20 +49,20 @@ class Test:
         actual_lines = actual.splitlines()
         for i in range(min(len(expected_lines), len(actual_lines))):
             if expected_lines[i] != actual_lines[i]:
-                print(f"""\t{stream_name}: line {i + 1}:
-                       expected `{expected_lines[i]}`, but got
-                       `{actual_lines[i]}`"""
+                print((f"\t{stream_name}: line {i + 1}: "
+                       f"expected `{expected_lines[i]}`, but got "
+                       f"`{actual_lines[i]}`")
                       )
                 self.success = False
         line_count_diff = len(actual_lines) - len(expected_lines)
 
         if line_count_diff > 0:
             print(
-                f"""\t{stream_name}:
-                 actual line count exceeds expected by {line_count_diff}"""
+                (f"\t{stream_name}: "
+                 f"actual line count exceeds expected by {line_count_diff}")
             )
         elif line_count_diff < 0:
             print(
-                f"""\t{stream_name}:
-                 output is {-line_count_diff} lines shorter than expected"""
+                (f"\t{stream_name}: "
+                 f"output is {-line_count_diff} lines shorter than expected")
             )
