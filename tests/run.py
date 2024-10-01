@@ -1,7 +1,10 @@
 from framework import getPathToTest, runCmd, Test
 
+executable = "./zig-out/bin/zg"
+
+
 def makeCmd(pattern: str, paths: [str]) -> str:
-    return f"./zig-out/bin/zg \"{pattern}\" {' '.join(map(getPathToTest, paths))}"
+    return f"{executable} \"{pattern}\" {' '.join(map(getPathToTest, paths))}"
 
 
 tests = [

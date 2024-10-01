@@ -1,6 +1,7 @@
 from subprocess import Popen, PIPE
 import pathlib
 
+
 class ANSI:
     RESET = '\033[0m'
     OK = '\033[92m'
@@ -12,13 +13,15 @@ class ANSI:
 def printColored(color: str, msg: str):
     print(color + msg + ANSI.RESET)
 
+
 def getPathToTest(filename: str) -> str:
     parent_dir = pathlib.Path(__file__).parent.resolve().as_posix()
     return '"' + parent_dir + '/data/' + filename + '"'
 
 
 def runCmd(cmd: str) -> (str, str):
-    p = Popen(cmd, shell=True, stdin=PIPE, stdout=PIPE, stderr=PIPE, close_fds=True)
+    p = Popen(cmd, shell=True, stdin=PIPE,
+              stdout=PIPE, stderr=PIPE, close_fds=True)
     return (p.stdout.read().decode(), p.stderr.read().decode())
 
 
@@ -46,11 +49,20 @@ class Test:
         actual_lines = actual.splitlines()
         for i in range(min(len(expected_lines), len(actual_lines))):
             if expected_lines[i] != actual_lines[i]:
-                print(f"\t{stream_name}: line {i + 1}: expected `{expected_lines[i]}`, but got `{actual_lines[i]}`")
+                print(f"""\t{stream_name}: line {i + 1}:
+                       expected `{expected_lines[i]}`, but got
+                       `{actual_lines[i]}`"""
+                      )
                 self.success = False
         line_count_diff = len(actual_lines) - len(expected_lines)
 
         if line_count_diff > 0:
-            print(f"\t{stream_name}: actual line count exceeds expected by {line_count_diff}")
+            print(
+                f"""\t{stream_name}:
+                 actual line count exceeds expected by {line_count_diff}"""
+            )
         elif line_count_diff < 0:
-            print(f"\t{stream_name}: output is {-line_count_diff} lines shorter than expected")
+            print(
+                f"""\t{stream_name}:
+                 output is {-line_count_diff} lines shorter than expected"""
+            )
