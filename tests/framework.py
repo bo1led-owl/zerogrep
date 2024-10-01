@@ -16,7 +16,7 @@ def printColored(color: str, msg: str):
 
 def getPathToTest(filename: str) -> str:
     parent_dir = pathlib.Path(__file__).parent.resolve().as_posix()
-    return '"' + parent_dir + '/data/' + filename + '"'
+    return parent_dir + '/data/' + filename
 
 
 def runCmd(cmd: str) -> (str, str):
@@ -59,10 +59,15 @@ class Test:
         if line_count_diff > 0:
             print(
                 (f"\t{stream_name}: "
-                 f"actual line count exceeds expected by {line_count_diff}")
+                 f"actual line count exceeds expected by {line_count_diff}:\n"
+                 f"\t\t`{'\n\t\t'.join(actual_lines[len(expected_lines):])}`")
             )
         elif line_count_diff < 0:
             print(
                 (f"\t{stream_name}: "
-                 f"output is {-line_count_diff} lines shorter than expected")
+                 f"output is {-line_count_diff} lines shorter than expected:\n"
+                 f"\t\t`{'\n\t\t'.join(expected_lines[len(actual_lines):])}`")
             )
+
+        if line_count_diff != 0:
+            self.success = False

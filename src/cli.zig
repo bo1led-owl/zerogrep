@@ -92,7 +92,7 @@ pub const Args = struct {
                 } else if (std.mem.eql(u8, "-n", arg) or std.mem.eql(u8, "--line-numbers", arg)) {
                     result.args.line_numbers = true;
                 } else if (std.mem.eql(u8, "-N", arg) or std.mem.eql(u8, "--no-line-numbers", arg)) {
-                    result.args.line_numbers = true;
+                    result.args.line_numbers = false;
                 } else if (std.mem.startsWith(u8, arg, "--color=")) {
                     const value = arg["--color=".len..];
                     if (std.mem.eql(u8, value, "auto")) {
