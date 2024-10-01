@@ -36,17 +36,22 @@ pub fn printHelp(writer: anytype) !void {
         \\
         \\Options:
         \\  -h, --help: print this message
-        \\  -p, --pretty: print colored output with filenames and line numbers
-        \\  -d, --data-only: print only matching lines, not filenames or line numbers
-        // \\  -r, --recursive: search recursively in all subdirectories
+        \\  -f, --filenames: print filenames
+        \\  -F, --no-filenames: do not print filenames
+        \\  -n, --line-numbers: print line numbers
+        \\  -N, --no-line-numbers: do not print line numbers
+        \\  --color=[auto, on, off]: specify when to highlight the output
     );
 }
 
 pub const Args = struct {
     const Self = @This();
 
-    pretty: bool = true,
     print_help: bool = false,
+    color: bool = true,
+    filenames: bool = true,
+    line_numbers: bool = true,
+
     pattern: []const u8 = "",
     paths: []const []const u8 = &[_][]u8{},
 
@@ -66,7 +71,12 @@ pub const Args = struct {
         var result = Result.init(gpa, arena);
 
         if (!stdout_is_tty) {
-            result.args.pretty = false;
+            result.args.filenames = false;
+            result.args.line_numbers = false;
+            result.args.color = false;
+        }
+        if (!stdin_is_tty) {
+            result.args.filenames = false;
         }
 
         var iter = try std.process.argsWithAllocator(gpa);
@@ -75,14 +85,27 @@ pub const Args = struct {
         _ = iter.skip(); // skip executable name
         const pattern = while (iter.next()) |arg| {
             if (std.mem.startsWith(u8, arg, "-")) {
-                if (std.mem.eql(u8, "-d", arg) or std.mem.eql(u8, "--data-only", arg)) {
-                    result.args.pretty = false;
-                } else if (std.mem.eql(u8, "-p", arg) or std.mem.eql(u8, "--pretty", arg)) {
-                    result.args.pretty = true;
+                if (std.mem.eql(u8, "-f", arg) or std.mem.eql(u8, "--filenames", arg)) {
+                    result.args.filenames = true;
+                } else if (std.mem.eql(u8, "-F", arg) or std.mem.eql(u8, "--no-filenames", arg)) {
+                    result.args.filenames = false;
+                } else if (std.mem.eql(u8, "-n", arg) or std.mem.eql(u8, "--line-numbers", arg)) {
+                    result.args.line_numbers = true;
+                } else if (std.mem.eql(u8, "-N", arg) or std.mem.eql(u8, "--no-line-numbers", arg)) {
+                    result.args.line_numbers = true;
+                } else if (std.mem.startsWith(u8, "--color=", arg)) {
+                    const value = arg["--color=".len..];
+                    if (std.mem.eql(u8, value, "auto")) {
+                        result.args.color = stdout_is_tty;
+                    } else if (std.mem.eql(u8, value, "on")) {
+                        result.args.color = true;
+                    } else if (std.mem.eql(u8, value, "off")) {
+                        result.args.color = false;
+                    } else {
+                        try result.errors.addError("Unknown value for `--color`: `{s}`. Possible values are `auto`, `on` and `off`", .{value}, {});
+                    }
                 } else if (std.mem.eql(u8, "-h", arg) or std.mem.eql(u8, "--help", arg)) {
                     result.args.print_help = true;
-                    // } else if (std.mem.eql(u8, "-r", arg) or std.mem.eql(u8, "--recursive", arg)) {
-                    //     result.args.recursive = true;
                 } else {
                     try result.errors.addError("Unknown option: `{s}`, use `--help` to see the guide", .{arg}, {});
                 }

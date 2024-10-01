@@ -17,6 +17,14 @@ const ExitCode = enum(u8) {
     IncorrectUsage = 2,
 };
 
+const HandleFileFlags = struct {
+    multiple_files: bool,
+    first_file: bool,
+    line_numbers: bool,
+    filenames: bool,
+    color: bool,
+};
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
@@ -117,8 +125,9 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitC
         const flags = HandleFileFlags{
             .multiple_files = false,
             .first_file = true,
-            .print_line_numbers = false,
-            .pretty = args.pretty,
+            .line_numbers = args.line_numbers,
+            .filenames = false,
+            .color = args.color,
         };
         _ = try handleFile(stdin_file, "stdin", read_buffer, stdout, &strategy, flags);
     }
@@ -210,8 +219,9 @@ pub fn checkRecursively(gpa: std.mem.Allocator, args: cli.Args, cwd: std.fs.Dir,
     var flags = HandleFileFlags{
         .multiple_files = true,
         .first_file = true,
-        .print_line_numbers = args.pretty,
-        .pretty = args.pretty,
+        .line_numbers = args.line_numbers,
+        .filenames = args.filenames,
+        .color = args.color,
     };
 
     for (args.paths) |path| {
@@ -291,13 +301,6 @@ fn iterateOverDirectory(dir: std.fs.Dir, walker: *std.fs.Dir.Walker, stdout: any
     return ExitCode.Success;
 }
 
-const HandleFileFlags = struct {
-    multiple_files: bool,
-    first_file: bool,
-    print_line_numbers: bool,
-    pretty: bool,
-};
-
 fn LineReader(comptime ReaderType: type) type {
     return struct {
         const Self = @This();
@@ -367,19 +370,20 @@ fn handleFile(file: std.fs.File, path: []const u8, buffer: []u8, stdout: anytype
 }
 
 fn handleLine(stdout: anytype, filename: []const u8, line_number: u32, strategy: *SearchStrategy, line: []const u8, printed: *bool, flags: HandleFileFlags) !bool {
-    if (!flags.pretty) {
-        const match_result = try strategy.match(true, line);
-        if (match_result) |_| {
-            try stdout.print("{s}\n", .{line});
-        }
+    // if (!flags.pretty) {
+    //     const match_result = try strategy.match(true, line);
+    //     if (match_result) |_| {
+    //         try stdout.print("{s}\n", .{line});
+    //     }
 
-        return match_result != null;
-    }
+    //     return match_result != null;
+    // }
 
     var result = false;
     var start: u32 = 0;
     var printed_line_number = false;
-    while (try strategy.match(false, line[start..])) |match_result| {
+    const should_print_tail = flags.color;
+    while (try strategy.match(!flags.color, line[start..])) |match_result| {
         result = true;
 
         const slice_start = match_result.start + start;
@@ -389,15 +393,28 @@ fn handleLine(stdout: anytype, filename: []const u8, line_number: u32, strategy:
             try stdout.writeByte('\n');
         }
 
-        const should_print_filename = flags.multiple_files and !printed.*;
-        const should_print_line_number = flags.print_line_numbers and !printed_line_number;
+        const should_print_filename = flags.filenames and !printed.*;
+        const should_print_line_number = flags.line_numbers and !printed_line_number;
 
         if (should_print_filename) {
-            try stdout.print("{s}{s}{s}\n", .{ cli.ANSI.Fg.Magenta, filename, cli.ANSI.Reset });
+            if (flags.color) {
+                try stdout.writeAll(cli.ANSI.Fg.Magenta);
+            }
+            try stdout.writeAll(filename);
+            if (flags.color) {
+                try stdout.writeAll(cli.ANSI.Reset);
+            }
+            try stdout.writeByte('\n');
         }
 
         if (should_print_line_number) {
-            try stdout.print("{s}{d: >4}:{s} ", .{ cli.ANSI.Fg.Green, line_number, cli.ANSI.Reset });
+            if (flags.color) {
+                try stdout.writeAll(cli.ANSI.Fg.Green);
+            }
+            try stdout.print("{d: >4}: ", .{line_number});
+            if (flags.color) {
+                try stdout.writeAll(cli.ANSI.Reset);
+            }
             printed_line_number = true;
         }
 
@@ -406,14 +423,21 @@ fn handleLine(stdout: anytype, filename: []const u8, line_number: u32, strategy:
             break;
         }
 
-        try stdout.print("{s}{s}{s}{s}", .{ line[start..slice_start], cli.ANSI.Fg.Red ++ cli.ANSI.Bold, line[slice_start..slice_end], cli.ANSI.Reset });
+        if (flags.color) {
+            try stdout.print("{s}{s}{s}{s}", .{ line[start..slice_start], cli.ANSI.Fg.Red ++ cli.ANSI.Bold, line[slice_start..slice_end], cli.ANSI.Reset });
+        } else {
+            try stdout.print("{s}\n", .{line});
+        }
 
         start = slice_end;
         printed.* = true;
     }
 
-    if (result) {
+    if (result and should_print_tail) {
         try stdout.print("{s}\n", .{line[start..]});
+        if (start < line.len) {
+            printed.* = true;
+        }
     }
     return result;
 }
