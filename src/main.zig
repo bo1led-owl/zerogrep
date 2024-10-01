@@ -379,7 +379,7 @@ fn handleLine(stdout: anytype, filename: []const u8, line_number: u32, strategy:
     var result = false;
     var start: u32 = 0;
     var printed_line_number = false;
-    while (try strategy.match(true, line[start..])) |match_result| {
+    while (try strategy.match(false, line[start..])) |match_result| {
         result = true;
 
         const slice_start = match_result.start + start;
@@ -401,7 +401,13 @@ fn handleLine(stdout: anytype, filename: []const u8, line_number: u32, strategy:
             printed_line_number = true;
         }
 
+        if (slice_start == slice_end) {
+            // empty match occured, so we can skip the whole loop and just print the line
+            break;
+        }
+
         try stdout.print("{s}{s}{s}{s}", .{ line[start..slice_start], cli.ANSI.Fg.Red ++ cli.ANSI.Bold, line[slice_start..slice_end], cli.ANSI.Reset });
+
         start = slice_end;
         printed.* = true;
     }

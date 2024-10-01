@@ -48,7 +48,6 @@ pub const Args = struct {
     pretty: bool = true,
     print_help: bool = false,
     pattern: []const u8 = "",
-    // recursive: bool = false,
     paths: []const []const u8 = &[_][]u8{},
 
     pub const Result = struct {

@@ -46,7 +46,7 @@ pub fn match(self: Self, lazy: bool, line: []const u8) ?struct { start: u32, end
         }
     } else {
         if (self.walk(lazy, "", true)) |char_index| {
-            return .{ .start = 0, .end = @intCast(char_index + 1) };
+            return .{ .start = 0, .end = @intCast(char_index) };
         }
     }
 
