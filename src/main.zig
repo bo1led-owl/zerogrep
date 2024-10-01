@@ -17,14 +17,6 @@ const ExitCode = enum(u8) {
     IncorrectUsage = 2,
 };
 
-const HandleFileFlags = struct {
-    multiple_files: bool,
-    first_file: bool,
-    line_numbers: bool,
-    filenames: bool,
-    color: bool,
-};
-
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
@@ -129,7 +121,7 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitC
             .filenames = false,
             .color = args.color,
         };
-        _ = try handleFile(stdin_file, "stdin", read_buffer, stdout, &strategy, flags);
+        _ = try handleFile(flags, stdin_file, "stdin", &strategy, stdout, read_buffer);
     }
 
     try bw_stdout.flush();
@@ -248,7 +240,7 @@ fn handlePath(gpa: std.mem.Allocator, path: []const u8, stdout: anytype, stderr:
             };
             defer file.close();
 
-            const result = try handleFile(file, path, read_buffer, stdout, strategy, flags.*);
+            const result = try handleFile(flags.*, file, path, strategy, stdout, read_buffer);
             if (result) {
                 flags.*.first_file = false;
             }
@@ -289,7 +281,7 @@ fn iterateOverDirectory(dir: std.fs.Dir, walker: *std.fs.Dir.Walker, stdout: any
                 };
                 defer file.close();
 
-                const result = try handleFile(file, entry.path, read_buffer, stdout, strategy, flags.*);
+                const result = try handleFile(flags.*, file, entry.path, strategy, stdout, read_buffer);
                 if (result) {
                     flags.*.first_file = false;
                 }
@@ -349,7 +341,22 @@ fn lineReader(buffer: []u8, reader: anytype) LineReader(@TypeOf(reader)) {
     };
 }
 
-fn handleFile(file: std.fs.File, path: []const u8, buffer: []u8, stdout: anytype, strategy: *SearchStrategy, flags: HandleFileFlags) !bool {
+const HandleFileFlags = struct {
+    multiple_files: bool,
+    first_file: bool,
+    line_numbers: bool,
+    filenames: bool,
+    color: bool,
+};
+
+fn handleFile(
+    flags: HandleFileFlags,
+    file: std.fs.File,
+    path: []const u8,
+    strategy: *SearchStrategy,
+    stdout: anytype,
+    buffer: []u8,
+) !bool {
     var line_reader = lineReader(buffer, file.reader());
     try line_reader.preread();
 
@@ -361,41 +368,36 @@ fn handleFile(file: std.fs.File, path: []const u8, buffer: []u8, stdout: anytype
     var printed = false;
 
     while (try line_reader.next()) |line| : (line_number += 1) {
-        if (try handleLine(stdout, path, line_number, strategy, line, &printed, flags)) {
-            printed = true;
-        }
+        printed = try handleLine(line, strategy, line_number, stdout, path, printed, flags) or printed;
     }
 
     return printed;
 }
 
-fn handleLine(stdout: anytype, filename: []const u8, line_number: u32, strategy: *SearchStrategy, line: []const u8, printed: *bool, flags: HandleFileFlags) !bool {
-    // if (!flags.pretty) {
-    //     const match_result = try strategy.match(true, line);
-    //     if (match_result) |_| {
-    //         try stdout.print("{s}\n", .{line});
-    //     }
-
-    //     return match_result != null;
-    // }
-
-    var result = false;
+fn handleLine(
+    line: []const u8,
+    strategy: *SearchStrategy,
+    line_number: u32,
+    stdout: anytype,
+    filename: []const u8,
+    previously_printed: bool,
+    flags: HandleFileFlags,
+) !bool {
+    var printed = previously_printed;
     var start: u32 = 0;
     var printed_line_number = false;
+    var found = false;
     const should_print_tail = flags.color;
     while (try strategy.match(!flags.color, line[start..])) |match_result| {
-        result = true;
-
+        found = true;
         const slice_start = match_result.start + start;
         const slice_end = match_result.end + start;
 
-        if (!printed.* and flags.multiple_files and !flags.first_file) {
+        if (!printed and flags.multiple_files and !flags.first_file) {
             try stdout.writeByte('\n');
         }
 
-        const should_print_filename = flags.filenames and !printed.*;
-        const should_print_line_number = flags.line_numbers and !printed_line_number;
-
+        const should_print_filename = flags.filenames and !printed;
         if (should_print_filename) {
             if (flags.color) {
                 try stdout.writeAll(cli.ANSI.Fg.Magenta);
@@ -407,6 +409,7 @@ fn handleLine(stdout: anytype, filename: []const u8, line_number: u32, strategy:
             try stdout.writeByte('\n');
         }
 
+        const should_print_line_number = flags.line_numbers and !printed_line_number;
         if (should_print_line_number) {
             if (flags.color) {
                 try stdout.writeAll(cli.ANSI.Fg.Green);
@@ -430,16 +433,17 @@ fn handleLine(stdout: anytype, filename: []const u8, line_number: u32, strategy:
         }
 
         start = slice_end;
-        printed.* = true;
+        printed = true;
     }
 
-    if (result and should_print_tail) {
+    if (should_print_tail and found) {
         try stdout.print("{s}\n", .{line[start..]});
         if (start < line.len) {
-            printed.* = true;
+            printed = true;
         }
     }
-    return result;
+
+    return printed;
 }
 
 fn isFileBinary(buf: []const u8) bool {
