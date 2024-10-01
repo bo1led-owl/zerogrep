@@ -93,7 +93,7 @@ pub const Args = struct {
                     result.args.line_numbers = true;
                 } else if (std.mem.eql(u8, "-N", arg) or std.mem.eql(u8, "--no-line-numbers", arg)) {
                     result.args.line_numbers = true;
-                } else if (std.mem.startsWith(u8, "--color=", arg)) {
+                } else if (std.mem.startsWith(u8, arg, "--color=")) {
                     const value = arg["--color=".len..];
                     if (std.mem.eql(u8, value, "auto")) {
                         result.args.color = stdout_is_tty;
