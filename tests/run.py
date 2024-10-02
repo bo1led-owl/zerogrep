@@ -1,4 +1,4 @@
-from framework import makeCmd, getPathToTest, TestFramework, Test
+from framework import getPathToTest, TestFramework, Test
 
 tests = [
     Test(
@@ -34,7 +34,7 @@ tests = [
         pattern="foo",
         options=["-N", "-f", "--color=auto"],
         paths=["foo"],
-        expected=(f"{getPathToTest("foo")}\nfoo\nfoo\n", "")
+        expected=(getPathToTest("foo") + "\nfoo\nfoo\n", "")
     ),
     Test(
         name="All flags except filenames",

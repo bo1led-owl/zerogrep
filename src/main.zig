@@ -388,12 +388,12 @@ fn handleLine(
         const slice_start = match_result.start + start;
         const slice_end = match_result.end + start;
 
-        if (!printed and flags.multiple_files and !flags.first_file) {
-            try stdout.writeByte('\n');
-        }
-
         const should_print_filename = flags.filenames and !printed;
         if (should_print_filename) {
+            if (!printed and flags.multiple_files and !flags.first_file) {
+                try stdout.writeByte('\n');
+            }
+
             if (flags.color) {
                 try stdout.writeAll(cli.ANSI.Fg.Magenta);
             }
@@ -418,17 +418,19 @@ fn handleLine(
 
         if (slice_start == slice_end) {
             // empty match occured, so we can skip the whole loop and just print the line
-            break;
+            try stdout.print("{s}\n", .{line});
+            return true;
         }
 
+        printed = true;
         if (flags.color) {
             try stdout.print("{s}{s}{s}{s}", .{ line[start..slice_start], cli.ANSI.Fg.Red ++ cli.ANSI.Bold, line[slice_start..slice_end], cli.ANSI.Reset });
         } else {
             try stdout.print("{s}\n", .{line});
+            break;
         }
 
         start = slice_end;
-        printed = true;
     }
 
     if (should_print_tail and found) {
