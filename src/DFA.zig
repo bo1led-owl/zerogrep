@@ -1,6 +1,7 @@
 const std = @import("std");
 const Self = @This();
 const Builder = @import("DfaBuilder.zig");
+const MatchResult = @import("Regex.zig").MatchResult;
 
 states: std.ArrayListUnmanaged(State) = .{},
 initial_state: u32 = 0,
@@ -39,7 +40,7 @@ pub fn debugPrint(self: Self) void {
     }
 }
 
-pub fn match(self: Self, lazy: bool, line: []const u8) ?struct { start: u32, end: u32 } {
+pub fn match(self: Self, lazy: bool, line: []const u8) ?MatchResult {
     for (0..line.len) |i| {
         if (self.walk(lazy, line[i..], i == 0)) |char_index| {
             return .{ .start = @intCast(i), .end = @intCast(i + char_index) };

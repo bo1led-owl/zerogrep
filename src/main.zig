@@ -185,7 +185,7 @@ const SearchStrategy = union(enum) {
         }
     }
 
-    pub fn match(self: *SearchStrategy, lazy: bool, line: []const u8) !?struct { start: u32, end: u32 } {
+    pub fn match(self: *SearchStrategy, lazy: bool, line: []const u8) !?Regex.MatchResult {
         switch (self.*) {
             .StringLiteral => |l| {
                 if (std.mem.indexOf(u8, line, l)) |index| {
@@ -193,15 +193,10 @@ const SearchStrategy = union(enum) {
                 } else return null;
             },
             .NFA => |*n| {
-                const match_result = try n.*.nfa.match(&n.*.nfa_stack, line);
-                if (match_result) |res| {
-                    return .{ .start = res.start, .end = res.end };
-                } else return null;
+                return try n.*.nfa.match(&n.*.nfa_stack, line);
             },
             .DFA => |d| {
-                if (d.dfa.match(lazy, line)) |res| {
-                    return .{ .start = res.start, .end = res.end };
-                } else return null;
+                return d.dfa.match(lazy, line);
             },
         }
     }

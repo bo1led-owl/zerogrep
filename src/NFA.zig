@@ -1,6 +1,7 @@
 const std = @import("std");
 const Self = @This();
 const Builder = @import("NfaBuilder.zig");
+const MatchResult = @import("Regex.zig").MatchResult;
 
 states: std.ArrayListUnmanaged(State) = .{},
 accepting_states: std.ArrayListUnmanaged(u32) = .{},
@@ -134,7 +135,7 @@ fn walk(self: Self, stack: *Stack, input: []const u8, at_line_start: bool) !?u32
     return null;
 }
 
-pub fn match(self: Self, stack: *Stack, line: []const u8) !?struct { start: u32, end: u32 } {
+pub fn match(self: Self, stack: *Stack, line: []const u8) !?MatchResult {
     defer stack.clearRetainingCapacity();
 
     // var timer = try std.time.Timer.start();

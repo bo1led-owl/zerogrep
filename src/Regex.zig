@@ -7,6 +7,11 @@ const Self = @This();
 
 lexer: Lexer,
 
+pub const MatchResult = struct {
+    start: u32,
+    end: u32,
+};
+
 pub fn init(pattern: []const u8) Self {
     return .{
         .lexer = .{
