@@ -1,4 +1,5 @@
 from subprocess import Popen, PIPE
+import sys
 import pathlib
 
 
@@ -19,6 +20,13 @@ def getPathToTest(filename: str) -> str:
     return parent_dir + '/data/' + filename
 
 
+def makeCmd(pattern: str, options: [str], paths: [str]) -> str:
+    options = ' '.join(options)
+    paths = ' '.join(map(getPathToTest, paths))
+
+    return f"{options} \"{pattern}\" {paths}"
+
+
 def runCmd(cmd: str) -> (str, str):
     p = Popen(cmd, shell=True, stdin=PIPE,
               stdout=PIPE, stderr=PIPE, close_fds=True)
@@ -26,34 +34,53 @@ def runCmd(cmd: str) -> (str, str):
 
 
 class Test:
-    def __init__(self, name, cmd, expected):
+    def __init__(
+        self,
+        name: str,
+        pattern: str,
+        options: [str],
+        paths: [str],
+        expected: (str, str)
+    ):
         self.name = name
-        self.cmd = cmd
+        self.cmd = makeCmd(pattern, options, paths)
         self.expected = expected
-        self.success = True
 
-    def run(self):
+    def run(self, executable: str):
         print(f"{self.name}:")
-        expected_stdout, expected_stderr = self.expected
-        actual_stdout, actual_stderr = runCmd(self.cmd)
 
-        self.expectEqual("stdout", expected_stdout, actual_stdout)
-        self.expectEqual("stderr", expected_stderr, actual_stderr)
-        if self.success:
+        success = True
+        expected_stdout, expected_stderr = self.expected
+        actual_stdout, actual_stderr = runCmd(executable + ' ' + self.cmd)
+
+        success = success and self.expectEqual(
+            "stdout", expected_stdout, actual_stdout)
+        success = success and self.expectEqual(
+            "stderr", expected_stderr, actual_stderr)
+
+        if success:
             printColored(ANSI.OK, "\tOK")
         else:
             printColored(ANSI.FAIL, "\tFAILURE")
 
-    def expectEqual(self, stream_name: str, expected: str, actual: str):
+    def expectEqual(
+        self,
+        stream_name: str,
+        expected: str,
+        actual: str
+    ) -> bool:
+        result = True
+
         expected_lines = expected.splitlines()
         actual_lines = actual.splitlines()
         for i in range(min(len(expected_lines), len(actual_lines))):
             if expected_lines[i] != actual_lines[i]:
-                print((f"\t{stream_name}: line {i + 1}: "
-                       f"expected `{expected_lines[i]}`, but got "
-                       f"`{actual_lines[i]}`")
-                      )
-                self.success = False
+                print(
+                    (f"\t{stream_name}: line {i + 1}: "
+                     f"expected `{expected_lines[i]}`, but got "
+                     f"`{actual_lines[i]}`")
+                )
+                result = False
         line_count_diff = len(actual_lines) - len(expected_lines)
 
         if line_count_diff > 0:
@@ -70,4 +97,27 @@ class Test:
             )
 
         if line_count_diff != 0:
-            self.success = False
+            result = False
+        return result
+
+
+class TestFramework:
+    def __init__(self, tests: [Test]):
+        self.tests = tests
+
+    def run(self):
+        argc = len(sys.argv)
+        if argc < 2:
+            print("Expected command as an argument")
+            exit(2)
+        elif argc > 2:
+            print(
+                ("Too many arguments passed, "
+                 "only expected command as an argument")
+            )
+            exit(2)
+
+        command = sys.argv[1]
+
+        for t in self.tests:
+            t.run(command)

@@ -1,50 +1,54 @@
-from framework import getPathToTest, runCmd, Test
-
-executable = "./zig-out/bin/zg"
-
-
-def makeCmd(pattern: str, options: [str], paths: [str]) -> str:
-    options = ' '.join(options)
-    paths = ' '.join(map(getPathToTest, paths))
-
-    return f"{executable} {options} \"{pattern}\" {paths}"
-
+from framework import makeCmd, getPathToTest, TestFramework, Test
 
 tests = [
     Test(
-        "Foo",
-        makeCmd("foo", [], ["foo"]),
-        ("foo\nfoo", "")
+        name="Foo",
+        pattern="foo",
+        options=[],
+        paths=["foo"],
+        expected=("foo\nfoo", "")
     ),
     Test(
-        "No matches",
-        makeCmd("fizz", [], ["foo"]),
-        ("", "")
+        name="No matches",
+        pattern="fizz",
+        options=[],
+        paths=["foo"],
+        expected=("", "")
     ),
     Test(
-        "Basic regex",
-        makeCmd("foo|bar", [], ["foo"]),
-        ("foo\nbar\nfoo\nbar", "")
+        name="Basic regex",
+        pattern="foo|bar",
+        options=[],
+        paths=["foo"],
+        expected=("foo\nbar\nfoo\nbar", "")
     ),
     Test(
-        "All flags",
-        makeCmd("foo", ["-n", "-f", "--color=auto"], ["foo"]),
-        (f"{getPathToTest("foo")}\n   1: foo\n   4: foo\n", "")
+        name="All flags",
+        pattern="foo",
+        options=["-n", "-f", "--color=auto"],
+        paths=["foo"],
+        expected=(f"{getPathToTest("foo")}\n   1: foo\n   4: foo\n", "")
     ),
     Test(
-        "All flags except line numbers",
-        makeCmd("foo", ["-N", "-f", "--color=auto"], ["foo"]),
-        (f"{getPathToTest("foo")}\nfoo\nfoo\n", "")
+        name="All flags except line numbers",
+        pattern="foo",
+        options=["-N", "-f", "--color=auto"],
+        paths=["foo"],
+        expected=(f"{getPathToTest("foo")}\nfoo\nfoo\n", "")
     ),
     Test(
-        "All flags except filenames",
-        makeCmd("foo", ["-n", "-F", "--color=auto"], ["foo"]),
-        ("   1: foo\n   4: foo\n", "")
+        name="All flags except filenames",
+        pattern="foo",
+        options=["-n", "-F", "--color=auto"],
+        paths=["foo"],
+        expected=("   1: foo\n   4: foo\n", "")
     ),
     Test(
-        "Erroneous `color`",
-        makeCmd("foo", ["-n", "-F", "--color=foo"], ["foo"]),
-        (
+        name="Erroneous `color`",
+        pattern="foo",
+        options=["-n", "-F", "--color=foo"],
+        paths=["foo"],
+        expected=(
             "",
             ("Error: Unknown value for `--color`: `foo`. "
              "Possible values are `auto`, `on` and `off`")
@@ -52,5 +56,5 @@ tests = [
     )
 ]
 
-for t in tests:
-    t.run()
+framework = TestFramework(tests)
+framework.run()
