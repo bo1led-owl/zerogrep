@@ -53,6 +53,13 @@ tests = [
             ("Error: Unknown value for `--color`: `foo`. "
              "Possible values are `auto`, `on` and `off`")
         )
+    ),
+    Test(
+        name="Binary file",
+        pattern=".*",
+        options=["-N", "-F", "--color=off"],
+        paths=["binary"],
+        expected=("", "")
     )
 ]
 
