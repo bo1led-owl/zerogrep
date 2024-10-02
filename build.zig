@@ -29,11 +29,13 @@ pub fn build(b: *std.Build) void {
     // running `zig build`).
     // b.installArtifact(lib);
 
+    const should_strip = optimize != std.builtin.OptimizeMode.Debug;
     const exe = b.addExecutable(.{
         .name = "zg",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .strip = should_strip,
     });
 
     // This declares intent for the executable to be installed into the
