@@ -182,12 +182,12 @@ pub fn toStringLiteral(self: *Self, gpa: std.mem.Allocator) !?[]const u8 {
     return result;
 }
 
-pub const AutomataBuildResult = struct {
-    automata: NFA,
+pub const AutomatonBuildResult = struct {
+    automaton: NFA,
     errors: Errors(SourceSpan),
 };
 
-pub fn buildNFA(self: *Self, gpa: std.mem.Allocator, arena: std.mem.Allocator) !AutomataBuildResult {
+pub fn buildNFA(self: *Self, gpa: std.mem.Allocator, arena: std.mem.Allocator) !AutomatonBuildResult {
     var errors = Errors(SourceSpan).init(gpa, arena);
     var builder = NfaBuilder.init(gpa);
 
@@ -202,7 +202,7 @@ pub fn buildNFA(self: *Self, gpa: std.mem.Allocator, arena: std.mem.Allocator) !
     try builder.markStateAccepting(res.accepting_state);
 
     return .{
-        .automata = builder.build(),
+        .automaton = builder.build(),
         .errors = errors,
     };
 }
@@ -500,7 +500,7 @@ test "basic" {
 
     defer nfa_result.errors.deinit();
 
-    var nfa = nfa_result.automata;
+    var nfa = nfa_result.automaton;
     defer nfa.deinit(allocator);
 
     var nfa_stack = NFA.Stack.init(allocator);
@@ -527,7 +527,7 @@ test "group basic" {
 
     defer nfa_result.errors.deinit();
 
-    var nfa = nfa_result.automata;
+    var nfa = nfa_result.automaton;
     defer nfa.deinit(allocator);
 
     var nfa_stack = NFA.Stack.init(allocator);
@@ -555,7 +555,7 @@ test "alternatives" {
 
         defer nfa_result.errors.deinit();
 
-        var nfa = nfa_result.automata;
+        var nfa = nfa_result.automaton;
         defer nfa.deinit(allocator);
 
         var nfa_stack = NFA.Stack.init(allocator);
@@ -578,7 +578,7 @@ test "alternatives" {
 
         defer nfa_result.errors.deinit();
 
-        var nfa = nfa_result.automata;
+        var nfa = nfa_result.automaton;
         defer nfa.deinit(allocator);
 
         var nfa_stack = NFA.Stack.init(allocator);
@@ -595,7 +595,7 @@ test "alternatives" {
 
         defer nfa_result.errors.deinit();
 
-        var nfa = nfa_result.automata;
+        var nfa = nfa_result.automaton;
         defer nfa.deinit(allocator);
 
         var nfa_stack = NFA.Stack.init(allocator);
@@ -612,7 +612,7 @@ test "alternatives" {
 
         defer nfa_result.errors.deinit();
 
-        var nfa = nfa_result.automata;
+        var nfa = nfa_result.automaton;
         defer nfa.deinit(allocator);
 
         var nfa_stack = NFA.Stack.init(allocator);
@@ -639,7 +639,7 @@ test "repeating single char" {
 
         defer nfa_result.errors.deinit();
 
-        var nfa = nfa_result.automata;
+        var nfa = nfa_result.automaton;
         defer nfa.deinit(allocator);
 
         try std.testing.expect((try nfa.match(&nfa_stack, "foobar") != null));
@@ -660,7 +660,7 @@ test "repeating single char" {
 
         defer nfa_result.errors.deinit();
 
-        var nfa = nfa_result.automata;
+        var nfa = nfa_result.automaton;
         defer nfa.deinit(allocator);
 
         try std.testing.expect((try nfa.match(&nfa_stack, "foobar") != null));
@@ -692,7 +692,7 @@ test "repeating group" {
 
         defer nfa_result.errors.deinit();
 
-        var nfa = nfa_result.automata;
+        var nfa = nfa_result.automaton;
         defer nfa.deinit(allocator);
 
         try std.testing.expect((try nfa.match(&nfa_stack, "foobaz") != null));
@@ -710,7 +710,7 @@ test "repeating group" {
 
         defer nfa_result.errors.deinit();
 
-        var nfa = nfa_result.automata;
+        var nfa = nfa_result.automaton;
         defer nfa.deinit(allocator);
 
         try std.testing.expect((try nfa.match(&nfa_stack, "foobarbaz") != null));
@@ -739,7 +739,7 @@ test "optionals" {
 
         defer nfa_result.errors.deinit();
 
-        var nfa = nfa_result.automata;
+        var nfa = nfa_result.automaton;
         defer nfa.deinit(allocator);
 
         try std.testing.expect((try nfa.match(&nfa_stack, "b") != null));
@@ -757,7 +757,7 @@ test "optionals" {
 
         defer nfa_result.errors.deinit();
 
-        var nfa = nfa_result.automata;
+        var nfa = nfa_result.automaton;
         defer nfa.deinit(allocator);
 
         try std.testing.expect((try nfa.match(&nfa_stack, "bar") != null));
@@ -786,7 +786,7 @@ test "anchors" {
 
         defer nfa_result.errors.deinit();
 
-        var nfa = nfa_result.automata;
+        var nfa = nfa_result.automaton;
         defer nfa.deinit(allocator);
 
         try std.testing.expect((try nfa.match(&nfa_stack, "ab") != null));
@@ -802,7 +802,7 @@ test "anchors" {
 
         defer nfa_result.errors.deinit();
 
-        var nfa = nfa_result.automata;
+        var nfa = nfa_result.automaton;
         defer nfa.deinit(allocator);
 
         try std.testing.expect((try nfa.match(&nfa_stack, "ab") != null));
@@ -820,7 +820,7 @@ test "anchors" {
 
         defer nfa_result.errors.deinit();
 
-        var nfa = nfa_result.automata;
+        var nfa = nfa_result.automaton;
         defer nfa.deinit(allocator);
 
         try std.testing.expect(!(try nfa.match(&nfa_stack, "ab") != null));
@@ -836,7 +836,7 @@ test "anchors" {
 
         defer nfa_result.errors.deinit();
 
-        var nfa = nfa_result.automata;
+        var nfa = nfa_result.automaton;
         defer nfa.deinit(allocator);
 
         try std.testing.expect(!(try nfa.match(&nfa_stack, "ab") != null));
@@ -862,7 +862,7 @@ test "bracket expressions" {
         var nfa_result = try regex.buildNFA(allocator, arena);
         defer nfa_result.errors.deinit();
 
-        var nfa = nfa_result.automata;
+        var nfa = nfa_result.automaton;
         defer nfa.deinit(allocator);
 
         try std.testing.expect(nfa_result.errors.count() == 0);
@@ -882,7 +882,7 @@ test "bracket expressions" {
         var nfa_result = try regex.buildNFA(allocator, arena);
         defer nfa_result.errors.deinit();
 
-        var nfa = nfa_result.automata;
+        var nfa = nfa_result.automaton;
         defer nfa.deinit(allocator);
 
         try std.testing.expect(nfa_result.errors.count() == 0);
@@ -896,7 +896,7 @@ test "bracket expressions" {
         var nfa_result = try regex.buildNFA(allocator, arena);
         defer nfa_result.errors.deinit();
 
-        var nfa = nfa_result.automata;
+        var nfa = nfa_result.automaton;
         defer nfa.deinit(allocator);
 
         try std.testing.expect(nfa_result.errors.count() == 0);
@@ -911,7 +911,7 @@ test "bracket expressions" {
         var nfa_result = try regex.buildNFA(allocator, arena);
         defer nfa_result.errors.deinit();
 
-        var nfa = nfa_result.automata;
+        var nfa = nfa_result.automaton;
         defer nfa.deinit(allocator);
 
         try std.testing.expect(nfa_result.errors.count() == 0);
@@ -931,7 +931,7 @@ test "bracket expressions" {
         var nfa_result = try regex.buildNFA(allocator, arena);
         defer nfa_result.errors.deinit();
 
-        var nfa = nfa_result.automata;
+        var nfa = nfa_result.automaton;
         defer nfa.deinit(allocator);
 
         try std.testing.expect(nfa_result.errors.count() == 0);
@@ -949,7 +949,7 @@ test "bracket expressions" {
         var nfa_result = try regex.buildNFA(allocator, arena);
         defer nfa_result.errors.deinit();
 
-        var nfa = nfa_result.automata;
+        var nfa = nfa_result.automaton;
         defer nfa.deinit(allocator);
 
         try std.testing.expect(nfa_result.errors.count() == 0);
@@ -967,7 +967,7 @@ test "bracket expressions" {
         var nfa_result = try regex.buildNFA(allocator, arena);
         defer nfa_result.errors.deinit();
 
-        var nfa = nfa_result.automata;
+        var nfa = nfa_result.automaton;
         defer nfa.deinit(allocator);
 
         try std.testing.expect(nfa_result.errors.count() == 0);
@@ -987,7 +987,7 @@ test "bracket expressions" {
         var nfa_result = try regex.buildNFA(allocator, arena);
         defer nfa_result.errors.deinit();
 
-        var nfa = nfa_result.automata;
+        var nfa = nfa_result.automaton;
         defer nfa.deinit(allocator);
 
         try std.testing.expect(nfa_result.errors.count() == 0);
@@ -1007,7 +1007,7 @@ test "bracket expressions" {
         var nfa_result = try regex.buildNFA(allocator, arena);
         defer nfa_result.errors.deinit();
 
-        var nfa = nfa_result.automata;
+        var nfa = nfa_result.automaton;
         defer nfa.deinit(allocator);
 
         try std.testing.expect(nfa_result.errors.count() == 0);
@@ -1025,7 +1025,7 @@ test "bracket expressions" {
         var nfa_result = try regex.buildNFA(allocator, arena);
         defer nfa_result.errors.deinit();
 
-        var nfa = nfa_result.automata;
+        var nfa = nfa_result.automaton;
         defer nfa.deinit(allocator);
 
         try std.testing.expect(nfa_result.errors.count() == 0);
@@ -1045,7 +1045,7 @@ test "bracket expressions" {
 
         try std.testing.expect(nfa_result.errors.count() == 0);
 
-        var nfa = nfa_result.automata;
+        var nfa = nfa_result.automaton;
         defer nfa.deinit(allocator);
 
         try std.testing.expect((try nfa.match(&nfa_stack, "[") != null));
@@ -1063,7 +1063,7 @@ test "bracket expressions" {
 
         try std.testing.expect(nfa_result.errors.count() == 0);
 
-        var nfa = nfa_result.automata;
+        var nfa = nfa_result.automaton;
         defer nfa.deinit(allocator);
 
         try std.testing.expect((try nfa.match(&nfa_stack, "]") != null));
@@ -1106,7 +1106,7 @@ test "errors" {
         var regex = Self.init(pat);
         var nfa_result = try regex.buildNFA(allocator, arena);
 
-        defer nfa_result.automata.deinit(allocator);
+        defer nfa_result.automaton.deinit(allocator);
         defer nfa_result.errors.deinit();
 
         try std.testing.expect(nfa_result.errors.count() != 0);

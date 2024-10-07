@@ -91,7 +91,7 @@ fn walk(self: Self, lazy: bool, input: []const u8, at_line_start: bool) ?u32 {
     return result;
 }
 
-fn isStateAtLineStart(self: Self, state: u32) bool {
+pub fn isStateAtLineStart(self: Self, state: u32) bool {
     return std.sort.binarySearch(
         u32,
         state,
@@ -101,7 +101,7 @@ fn isStateAtLineStart(self: Self, state: u32) bool {
     ) != null;
 }
 
-fn isStateAtLineEnd(self: Self, state: u32) bool {
+pub fn isStateAtLineEnd(self: Self, state: u32) bool {
     return std.sort.binarySearch(
         u32,
         state,
@@ -111,7 +111,7 @@ fn isStateAtLineEnd(self: Self, state: u32) bool {
     ) != null;
 }
 
-fn isStateAccepting(self: Self, state: u32) bool {
+pub fn isStateAccepting(self: Self, state: u32) bool {
     return std.sort.binarySearch(
         u32,
         state,

@@ -93,14 +93,14 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitC
             for (nfa_build_result.errors.items()) |err| {
                 try reportRegexError(stderr, args.pattern, err.payload, err.message);
             }
-            nfa_build_result.automata.deinit(gpa);
+            nfa_build_result.automaton.deinit(gpa);
             return ExitCode.IncorrectUsage;
         }
 
         // TODO: limit DFA size, roll back to NFA in critical situations
-        // break :strategy_blk SearchStrategy.initNFA(gpa, nfa_build_result.automata);
+        // break :strategy_blk SearchStrategy.initNFA(gpa, nfa_build_result.automaton);
 
-        const dfa = try buildDfaFromNfa(gpa, nfa_build_result.automata);
+        const dfa = try buildDfaFromNfa(gpa, nfa_build_result.automaton);
         break :strategy_blk SearchStrategy.initDFA(dfa);
     };
     defer strategy.deinit(gpa);
