@@ -7,6 +7,8 @@ const DFA = @import("DFA.zig");
 const DfaBuilder = @import("DfaBuilder.zig");
 const Errors = @import("errors.zig").Errors;
 
+const buildDfaFromNfa = @import("determinization.zig").buildDfaFromNfa;
+
 const KiB = 1024;
 const MiB = 1024 * KiB;
 const GiB = 1024 * MiB;
@@ -98,8 +100,7 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitC
         // TODO: limit DFA size, roll back to NFA in critical situations
         // break :strategy_blk SearchStrategy.initNFA(gpa, nfa_build_result.automata);
 
-        var dfa_builder = DfaBuilder.init(gpa);
-        const dfa = try dfa_builder.buildFromNFA(nfa_build_result.automata);
+        const dfa = try buildDfaFromNfa(gpa, nfa_build_result.automata);
         break :strategy_blk SearchStrategy.initDFA(dfa);
     };
     defer strategy.deinit(gpa);
