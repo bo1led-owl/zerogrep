@@ -72,6 +72,8 @@ fn mergeNfaStates(builder: *DfaBuilder, set_list: *StateSetList, cur_dfa_state: 
 }
 
 const StateSetList = struct {
+    const Self = @This();
+
     allocator: std.mem.Allocator,
     sets: std.ArrayListUnmanaged([]const u32) = .{},
     set_to_dfa_state: std.ArrayListUnmanaged(?u32) = .{},
@@ -79,13 +81,13 @@ const StateSetList = struct {
 
     pub const SetIndex = u32;
 
-    pub fn init(allocator: std.mem.Allocator) !StateSetList {
-        return StateSetList{
+    pub fn init(allocator: std.mem.Allocator) !Self {
+        return Self{
             .allocator = allocator,
         };
     }
 
-    pub fn deinit(self: *StateSetList) void {
+    pub fn deinit(self: *Self) void {
         for (self.sets.items) |closure| {
             self.allocator.free(closure);
         }
@@ -94,11 +96,11 @@ const StateSetList = struct {
         self.unvisited_states.deinit(self.allocator);
     }
 
-    fn getSet(self: StateSetList, set_index: SetIndex) []const u32 {
+    fn getSet(self: Self, set_index: SetIndex) []const u32 {
         return self.sets.items[set_index];
     }
 
-    pub fn getNextSet(self: *StateSetList) ?struct { set: []const u32, dfa_state: u32 } {
+    pub fn getNextSet(self: *Self) ?struct { set: []const u32, dfa_state: u32 } {
         const result_index = self.unvisited_states.popOrNull();
         if (result_index) |index| {
             return .{
@@ -110,7 +112,7 @@ const StateSetList = struct {
         }
     }
 
-    pub fn ensureEpsilonClosureExists(self: *StateSetList, dfa_builder: *DfaBuilder, nfa: NFA, nfa_state: u32) !void {
+    pub fn ensureEpsilonClosureExists(self: *Self, dfa_builder: *DfaBuilder, nfa: NFA, nfa_state: u32) !void {
         const closure = try getEpsilonClosure(self.allocator, nfa, nfa_state);
 
         var index = self.findSet(closure);
@@ -131,7 +133,7 @@ const StateSetList = struct {
         );
     }
 
-    pub fn mergeClosures(self: *StateSetList, dfa_builder: *DfaBuilder, nfa: NFA, nfa_states: []const u32) !SetIndex {
+    pub fn mergeClosures(self: *Self, dfa_builder: *DfaBuilder, nfa: NFA, nfa_states: []const u32) !SetIndex {
         std.debug.assert(nfa_states.len > 0);
 
         var merged_set = std.ArrayList(u32).init(self.allocator);
@@ -174,7 +176,7 @@ const StateSetList = struct {
         return self.set_to_dfa_state.items[index.?].?;
     }
 
-    fn findSet(self: StateSetList, needle: []const u32) ?usize {
+    fn findSet(self: Self, needle: []const u32) ?usize {
         for (0.., self.sets.items) |i, set| {
             if (std.mem.eql(u32, set, needle)) {
                 return i;
