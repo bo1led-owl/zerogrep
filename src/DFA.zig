@@ -35,7 +35,7 @@ pub fn debugPrint(self: Self) void {
         std.debug.print("State {d}\n", .{i});
         var iter = state.transitions.iterator();
         while (iter.next()) |entry| {
-            std.debug.print("\t{c} -> {d}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
+            std.debug.print("\t`{c}` -> {d}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
         }
     }
 }

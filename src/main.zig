@@ -8,6 +8,7 @@ const DfaBuilder = @import("DfaBuilder.zig");
 const Errors = @import("errors.zig").Errors;
 
 const buildDfaFromNfa = @import("determinization.zig").buildDfaFromNfa;
+const minimizeDFA = @import("DFA_minimization.zig").minimizeDFA;
 
 const KiB = 1024;
 const MiB = 1024 * KiB;
@@ -27,14 +28,14 @@ pub fn main() !void {
         std.debug.assert(status != .leak);
     }
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
+    var error_msg_arena = std.heap.ArenaAllocator.init(allocator);
+    defer error_msg_arena.deinit();
 
     const stderr_file = std.io.getStdErr().writer();
     var bw_stderr = std.io.bufferedWriter(stderr_file);
     const stderr = bw_stderr.writer();
 
-    const code = run(allocator, arena.allocator(), stderr) catch |e| blk: {
+    const code = run(allocator, error_msg_arena.allocator(), stderr) catch |e| blk: {
         try stderr.print("Error: {s}\n", .{@errorName(e)});
         break :blk ExitCode.GenericError;
     };
@@ -43,7 +44,7 @@ pub fn main() !void {
     std.process.exit(@intFromEnum(code));
 }
 
-fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitCode {
+fn run(gpa: std.mem.Allocator, error_msg_arena: std.mem.Allocator, stderr: anytype) !ExitCode {
     const stdout_file = std.io.getStdOut();
     var bw_stdout = std.io.bufferedWriter(stdout_file.writer());
     const stdout = bw_stdout.writer();
@@ -53,7 +54,7 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitC
     var args = args_blk: {
         const stdin_is_tty = std.io.getStdIn().isTty();
         const stdout_is_tty = stdout_file.isTty();
-        var cli_result = try cli.Args.parse(gpa, arena, stdin_is_tty, stdout_is_tty);
+        var cli_result = try cli.Args.parse(gpa, error_msg_arena, stdin_is_tty, stdout_is_tty);
         defer cli_result.errors.deinit();
 
         if (cli_result.args.print_help) {
@@ -86,7 +87,7 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitC
             break :strategy_blk SearchStrategy.initStringLiteral(l);
         }
 
-        var nfa_build_result = try regex.buildNFA(gpa, arena);
+        var nfa_build_result = try regex.buildNFA(gpa, error_msg_arena);
         defer nfa_build_result.errors.deinit();
 
         if (nfa_build_result.errors.count() != 0) {
@@ -100,8 +101,14 @@ fn run(gpa: std.mem.Allocator, arena: std.mem.Allocator, stderr: anytype) !ExitC
         // TODO: limit DFA size, roll back to NFA in critical situations
         // break :strategy_blk SearchStrategy.initNFA(gpa, nfa_build_result.automaton);
 
-        const dfa = try buildDfaFromNfa(gpa, nfa_build_result.automaton);
-        break :strategy_blk SearchStrategy.initDFA(dfa);
+        var dfa = try buildDfaFromNfa(gpa, nfa_build_result.automaton);
+        defer dfa.deinit(gpa);
+
+        var minimization_arena = std.heap.ArenaAllocator.init(gpa);
+        defer minimization_arena.deinit();
+
+        const min_dfa = try minimizeDFA(gpa, minimization_arena.allocator(), dfa);
+        break :strategy_blk SearchStrategy.initDFA(min_dfa);
     };
     defer strategy.deinit(gpa);
 

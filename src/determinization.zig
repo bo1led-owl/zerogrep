@@ -210,3 +210,94 @@ const StateSetList = struct {
         }
     }
 };
+
+test "basic NFA to DFA" {
+    const NfaBuilder = @import("NfaBuilder.zig");
+
+    const allocator = std.testing.allocator;
+    var nfa_builder = NfaBuilder.init(allocator);
+
+    for (0..4) |_| {
+        _ = try nfa_builder.addState(.{});
+    }
+
+    try nfa_builder.addTransition(0, NFA.Transition{
+        .range = NFA.Transition.Range.fromChar('0'),
+        .dest_index = 1,
+    });
+    try nfa_builder.addEpsTransition(0, 2);
+
+    try nfa_builder.addTransition(1, NFA.Transition{
+        .range = NFA.Transition.Range.fromChar('1'),
+        .dest_index = 1,
+    });
+    try nfa_builder.addTransition(1, NFA.Transition{
+        .range = NFA.Transition.Range.fromChar('1'),
+        .dest_index = 3,
+    });
+
+    try nfa_builder.addTransition(2, NFA.Transition{
+        .range = NFA.Transition.Range.fromChar('0'),
+        .dest_index = 3,
+    });
+    try nfa_builder.addEpsTransition(2, 1);
+
+    try nfa_builder.addTransition(3, NFA.Transition{
+        .range = NFA.Transition.Range.fromChar('0'),
+        .dest_index = 2,
+    });
+
+    try nfa_builder.markStateAccepting(2);
+    try nfa_builder.markStateAccepting(3);
+
+    var nfa = nfa_builder.build();
+    defer nfa.deinit(allocator);
+
+    var dfa = try buildDfaFromNfa(allocator, nfa);
+    defer dfa.deinit(allocator);
+
+    try std.testing.expect(dfa.match(true, "000") != null);
+    try std.testing.expect(dfa.match(true, "100") != null);
+    try std.testing.expect(dfa.match(true, "01110100") != null);
+    try std.testing.expect(dfa.match(true, "1110100") != null);
+}
+
+test "NFA loop" {
+    const NfaBuilder = @import("NfaBuilder.zig");
+
+    const allocator = std.testing.allocator;
+    var nfa_builder = NfaBuilder.init(allocator);
+
+    for (0..3) |_| {
+        _ = try nfa_builder.addState(.{});
+    }
+
+    try nfa_builder.addTransition(0, NFA.Transition{
+        .range = NFA.Transition.Range.fromChar('a'),
+        .dest_index = 1,
+    });
+
+    try nfa_builder.addEpsTransition(1, 0);
+
+    try nfa_builder.addTransition(1, NFA.Transition{
+        .range = NFA.Transition.Range.fromChar('b'),
+        .dest_index = 2,
+    });
+
+    try nfa_builder.markStateAccepting(2);
+
+    var nfa = nfa_builder.build();
+    defer nfa.deinit(allocator);
+
+    var dfa = try buildDfaFromNfa(allocator, nfa);
+    defer dfa.deinit(allocator);
+
+    try std.testing.expect(dfa.match(true, "ab") != null);
+    try std.testing.expect(dfa.match(true, "aab") != null);
+    try std.testing.expect(dfa.match(true, "aaaab") != null);
+    try std.testing.expect(dfa.match(true, "aaaaaaaaab") != null);
+    try std.testing.expect(!(dfa.match(true, "") != null));
+    try std.testing.expect(!(dfa.match(true, "aaaaaaaaaaaaaa") != null));
+    try std.testing.expect(!(dfa.match(true, "b") != null));
+    try std.testing.expect(!(dfa.match(true, "baa") != null));
+}
